@@ -1,0 +1,18 @@
+root = true
+
+[*]
+end_of_line = lf
+charset = utf-8
+trim_trailing_whitespace = true
+
+[{*.hs, *.cabal, cabal.project}]
+indent_size = 2
+indent_style = space
+
+[Cargo.toml]
+indent_size = 2
+indent_style = space
+
+[*.rs]
+indent_size = 4
+indent_style = space
