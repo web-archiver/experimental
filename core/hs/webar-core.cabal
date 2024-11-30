@@ -1,0 +1,51 @@
+cabal-version:      3.0
+name:               webar-core
+version:            0.1.0.0
+license:            AGPL-3.0-only
+license-file:       LICENSE
+maintainer:         dariankline@outlook.com
+author:             Jose Lane
+build-type:         Simple
+extra-source-files:
+    tests/gcbor/data/*.bin
+    tests/gcbor/data/*.txt
+
+library
+    exposed-modules:
+        Webar.Codec.GCbor
+        Webar.Text.Normalized
+
+    hs-source-dirs:     src
+    other-modules:
+        Webar.Codec.GCbor.Internal.Encoding
+        Webar.Codec.GCbor.Internal.Decoding
+
+    default-language:   Haskell2010
+    default-extensions: StrictData
+    ghc-options:        -Wall
+    build-depends:
+        base >=4.17.2 && <4.19,
+        text >=2.0.2 && <2.1,
+        bytestring >=0.11.5 && <0.12,
+        vector >=0.13.1 && <0.14,
+        containers >=0.6.7 && <0.7,
+        cborg >=0.2.10 && <0.3,
+        uuid-types >=1.0.5 && <1.1,
+        template-haskell >=2.19.0 && <2.21
+
+test-suite gcbor
+    type:             exitcode-stdio-1.0
+    main-is:          Main.hs
+    hs-source-dirs:   tests/gcbor
+    default-language: Haskell2010
+    ghc-options:      -Wall
+    build-depends:
+        base,
+        text >=2.0.2 && <2.1,
+        bytestring >=0.11.5 && <0.12,
+        vector >=0.13.1 && <0.14,
+        containers >=0.6.7 && <0.7,
+        uuid-types >=1.0.5 && <1.1,
+        filepath >=1.4.2 && <1.6,
+        hspec >=2.11 && <2.12,
+        webar-core
