@@ -7,3 +7,5 @@ pub mod codec {
 pub mod text {
     pub mod normalized;
 }
+
+pub mod time;

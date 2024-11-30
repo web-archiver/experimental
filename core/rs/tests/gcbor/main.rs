@@ -239,6 +239,44 @@ mod array {
     }
 }
 
+mod time {
+    use webar_core::time::{TimePeriod, Timestamp};
+
+    use crate::test_success;
+
+    mod timestamp {
+        use webar_core::time::Timestamp;
+
+        use crate::test_success;
+
+        #[test]
+        fn with_uncertainty() {
+            test_success(
+                Timestamp::new(1697724754, 873294000, Some((0, 1000))),
+                include_bytes!("./data/timestamp_uncertainty.bin"),
+            )
+        }
+        #[test]
+        fn no_uncertainty() {
+            test_success(
+                Timestamp::new(1697724754, 873294000, None),
+                include_bytes!("./data/timestamp_no_uncertainty.bin"),
+            )
+        }
+    }
+
+    #[test]
+    fn period() {
+        test_success(
+            TimePeriod(
+                Timestamp::new(1697724754, 873294000, Some((0, 1))),
+                Timestamp::new(1697724755, 0, Some((0, 1))),
+            ),
+            include_bytes!("./data/period_sample.bin"),
+        )
+    }
+}
+
 mod uuid {
     use uuid::{uuid, Uuid};
 

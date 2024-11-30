@@ -40,7 +40,7 @@ impl<'a> Read for Reader<'a> {
 pub(crate) enum InnerError<E> {
     #[error("cbor error")]
     Cbor(#[source] ciborium_ll::Error<E>),
-    #[error("{ty}: {expected}, but got invalid header {actual:?}")]
+    #[error("{ty}: expect {expected}, but got invalid header {actual:?}")]
     TypeError {
         ty: TypeInfo,
         expected: &'static str,

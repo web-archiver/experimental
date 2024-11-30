@@ -23,6 +23,7 @@ import Test.Hspec
 import Webar.Codec.GCbor
 import Webar.Text.Normalized (NFText, nfTxt)
 import qualified Webar.Text.Normalized as NF
+import Webar.Time
 
 mkTestBin :: (Show a, Eq a, ToGCbor a, FromGCbor a) => String -> a -> BS.ByteString -> Spec
 mkTestBin name v bin =
@@ -119,6 +120,25 @@ bytes = describe "bytes" do
   mkTest "empty" BS.empty "empty_bytes"
   mkTest "sample" (BS.pack [0x01, 0x02, 0x03, 0x04]) "sample_bytes"
 
+timeTests :: Spec
+timeTests = describe "time" do
+  describe "Timestamp" do
+    mkTest
+      "with_uncertainty"
+      (mkTestTimestamp 1697724754 873294000 (Just (0, 1000)))
+      "timestamp_uncertainty"
+    mkTest
+      "no_uncertainty"
+      (mkTestTimestamp 1697724754 873294000 Nothing)
+      "timestamp_no_uncertainty"
+  mkTest
+    "TimePeriod"
+    ( TimePeriod
+        (mkTestTimestamp 1697724754 873294000 (Just (0, 1)))
+        (mkTestTimestamp 1697724755 0 (Just (0, 1)))
+    )
+    "period_sample"
+
 uuidTests :: Spec
 uuidTests = describe "uuid" do
   mkTest "nil" UUID.nil "uuid_nil"
@@ -138,4 +158,5 @@ main = hspec do
   describe "bool" do
     mkTest "false" False "false"
     mkTest "true" True "true"
+  timeTests
   uuidTests
