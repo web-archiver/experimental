@@ -13,11 +13,13 @@ extra-source-files:
 library
     exposed-modules:
         Webar.Codec.GCbor
+        Webar.Codec.GCbor.TH
         Webar.Text.Normalized
         Webar.Time
 
     hs-source-dirs:     src
     other-modules:
+        Webar.Codec.GCbor.Internal.Ord
         Webar.Codec.GCbor.Internal.Encoding
         Webar.Codec.GCbor.Internal.Decoding
 
@@ -30,6 +32,7 @@ library
         bytestring >=0.11.5 && <0.12,
         vector >=0.13.1 && <0.14,
         containers >=0.6.7 && <0.7,
+        aeson >=2.2.1 && <2.3,
         cborg >=0.2.10 && <0.3,
         uuid-types >=1.0.5 && <1.1,
         template-haskell >=2.19.0 && <2.21
@@ -38,6 +41,11 @@ test-suite gcbor
     type:             exitcode-stdio-1.0
     main-is:          Main.hs
     hs-source-dirs:   tests/gcbor
+    other-modules:
+        Common
+        Product
+        Sum
+
     default-language: Haskell2010
     ghc-options:      -Wall
     build-depends:
@@ -49,4 +57,18 @@ test-suite gcbor
         uuid-types >=1.0.5 && <1.1,
         filepath >=1.4.2 && <1.6,
         hspec >=2.11 && <2.12,
+        webar-core
+
+test-suite gcbor-ord
+    type:             exitcode-stdio-1.0
+    main-is:          Main.hs
+    hs-source-dirs:   tests/gcbor-ord
+    default-language: Haskell2010
+    ghc-options:      -Wall
+    build-depends:
+        base,
+        text >=2.0.2 && <2.1,
+        bytestring >=0.11.5 && <0.12,
+        hspec >=2.11 && <2.12,
+        QuickCheck >=2.14 && <2.15,
         webar-core

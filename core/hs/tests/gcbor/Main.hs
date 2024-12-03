@@ -8,6 +8,7 @@
 
 module Main (main) where
 
+import Common (mkTest)
 import Data.Bits (FiniteBits (finiteBitSize))
 import qualified Data.ByteString as BS
 import Data.Int (Int16, Int32, Int64, Int8)
@@ -18,24 +19,13 @@ import Data.Typeable (Typeable, typeOf, typeRep)
 import qualified Data.UUID.Types as UUID
 import qualified Data.Vector as V
 import Data.Word (Word16, Word32, Word64, Word8)
-import System.FilePath ((<.>), (</>))
+import qualified Product
+import qualified Sum
 import Test.Hspec
 import Webar.Codec.GCbor
 import Webar.Text.Normalized (NFText, nfTxt)
 import qualified Webar.Text.Normalized as NF
 import Webar.Time
-
-mkTestBin :: (Show a, Eq a, ToGCbor a, FromGCbor a) => String -> a -> BS.ByteString -> Spec
-mkTestBin name v bin =
-  describe name do
-    it "serialize" (encodeStrictBs v `shouldBe` bin)
-    it "deserialize" do
-      decodeStrictBsThrow bin `shouldBe` v
-
-mkTest :: (Show a, Eq a, FromGCbor a, ToGCbor a) => String -> a -> FilePath -> Spec
-mkTest name v path = do
-  bin <- runIO (BS.readFile ("tests/gcbor/data" </> path <.> "bin"))
-  mkTestBin name v bin
 
 minMax :: Spec
 minMax = describe "min_max" do
@@ -158,5 +148,7 @@ main = hspec do
   describe "bool" do
     mkTest "false" False "false"
     mkTest "true" True "true"
+  Product.spec
+  Sum.spec
   timeTests
   uuidTests

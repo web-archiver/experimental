@@ -11,7 +11,9 @@
 --  can be handled. For other types that need manual encode and decode, define them
 --  here and reexport in the corresponding package as temporary measure.
 module Webar.Codec.GCbor
-  ( ToGCbor,
+  ( GCborOrd,
+    compareGCbor,
+    ToGCbor,
     FromGCbor,
     -- only export basic functions now
     encodeStrictBs,
@@ -27,6 +29,7 @@ import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
 import Webar.Codec.GCbor.Internal.Decoding
 import Webar.Codec.GCbor.Internal.Encoding
+import Webar.Codec.GCbor.Internal.Ord
 
 encodeStrictBs :: (ToGCbor a) => a -> BS.ByteString
 encodeStrictBs v = toStrictByteString (getEncoding (toGCbor v))

@@ -2,6 +2,15 @@
 
 module Webar.Codec.GCbor.Internal.Encoding
   ( Encoding (..),
+    omissibleFieldSize,
+    encodeField,
+    encodeOmissibleField,
+    encodeNormalProduct,
+    encodeRecordProduct,
+    encodeUnitSum,
+    encodeUnarySum,
+    encodeNormalSum,
+    encodeRecordSum,
     ToGCbor (..),
   )
 where
@@ -77,3 +86,36 @@ instance (ToGCbor a) => ToGCbor (V.Vector a) where
 
 instance ToGCbor UUID.UUID where
   toGCbor u = Encoding (Enc.encodeTag 37 <> Enc.encodeBytes (LBS.toStrict (UUID.toByteString u)))
+
+encodeField :: (ToGCbor v) => NT.NFText -> v -> Encoding
+encodeField k v = toGCbor k <> toGCbor v
+
+omissibleFieldSize :: Maybe a -> Word
+omissibleFieldSize (Just _) = 1
+omissibleFieldSize Nothing = 0
+{-# INLINE omissibleFieldSize #-}
+
+encodeOmissibleField :: (ToGCbor v) => NT.NFText -> Maybe v -> Encoding
+encodeOmissibleField k (Just v) = toGCbor k <> toGCbor v
+encodeOmissibleField _ Nothing = mempty
+
+encodeNormalProduct :: Word -> Encoding
+encodeNormalProduct = coerce Enc.encodeListLen
+
+encodeRecordProduct :: Word -> Encoding
+encodeRecordProduct = coerce Enc.encodeMapLen
+
+encodeUnitSum :: NT.NFText -> Encoding
+encodeUnitSum = toGCbor
+
+compoundSum :: NT.NFText -> Encoding
+compoundSum n = Encoding (Enc.encodeTag 27 <> Enc.encodeListLen 2) <> toGCbor n
+
+encodeUnarySum :: (ToGCbor a) => NT.NFText -> a -> Encoding
+encodeUnarySum n v = compoundSum n <> toGCbor v
+
+encodeNormalSum :: NT.NFText -> Word -> Encoding
+encodeNormalSum n l = compoundSum n <> Encoding (Enc.encodeListLen l)
+
+encodeRecordSum :: NT.NFText -> Word -> Encoding
+encodeRecordSum n l = compoundSum n <> Encoding (Enc.encodeMapLen l)
