@@ -6,7 +6,6 @@ module Product (spec) where
 
 import Common (mkTest)
 import Data.Int
-import qualified Data.List as L
 import qualified Data.Vector as V
 import Data.Word
 import Test.Hspec
@@ -122,13 +121,11 @@ sortNested = describe "sort_nested" do
 
 omitTest :: (Show v, Eq v, FromGCbor v, ToGCbor v) => [Word] -> v -> Spec
 omitTest omit v =
-  mkTest
-    (toAbbr omit)
-    v
-    ("prod_omit_" ++ toAbbr ([0, 1, 2, 3, 4] L.\\ omit))
+  let abbr = toAbbr omit
+   in mkTest abbr v ("prod_omit_" ++ abbr)
   where
-    toAbbr [] = "empty"
-    toAbbr fs = foldMap (\f -> 'f' : show f) fs
+    toAbbr [] = "full"
+    toAbbr fs = foldMap (\f -> 'o' : show f) fs
 
 data POmitR2O1R2 = POmitR2O1R2
   { po0F0 :: Word8,

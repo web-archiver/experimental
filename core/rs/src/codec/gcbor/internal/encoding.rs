@@ -9,13 +9,80 @@ use crate::{
     text::normalized::{NFStr, NFString},
 };
 
-use super::{TypeInfo, UUID_TAG};
+use super::{TypeInfo, ENUM_TAG, UUID_TAG};
 
 #[derive(Debug, thiserror::Error)]
 pub struct Error<E>(#[from] pub(in crate::codec::gcbor) E);
 
 pub struct Encoder<'a, W: Write>(pub(crate) &'a mut ciborium_ll::Encoder<W>);
 impl<'a, W: Write> Encoder<'a, W> {
+    pub fn encode_tuple_struct(
+        self,
+        _ty: TypeInfo,
+        size: usize,
+    ) -> Result<TupleStructEncoder<'a, W>, Error<W::Error>> {
+        self.0.push(Header::Array(Some(size)))?;
+        Ok(TupleStructEncoder(self.0))
+    }
+    pub fn encode_struct(
+        self,
+        _ty: TypeInfo,
+        size: usize,
+    ) -> Result<StructEncoder<'a, W>, Error<W::Error>> {
+        self.0.push(Header::Map(Some(size)))?;
+        Ok(StructEncoder(self.0))
+    }
+
+    pub fn encode_unit_variant(
+        self,
+        _ty: TypeInfo,
+        variant: &'static str,
+    ) -> Result<(), Error<W::Error>> {
+        self.0.push(Header::Text(Some(variant.len())))?;
+        self.0.write_all(variant.as_bytes())?;
+        Ok(())
+    }
+
+    fn encode_compound_variant(&mut self, variant: &'static str) -> Result<(), Error<W::Error>> {
+        self.0.push(Header::Tag(ENUM_TAG))?;
+        self.0.push(Header::Array(Some(2)))?;
+
+        self.0.push(Header::Text(Some(variant.len())))?;
+        self.0.write_all(variant.as_bytes())?;
+        Ok(())
+    }
+    pub fn encode_newtype_variant<V: ToGCbor>(
+        mut self,
+        _ty: TypeInfo,
+        variant: &'static str,
+        value: &V,
+    ) -> Result<(), Error<W::Error>> {
+        self.encode_compound_variant(variant)?;
+        value.encode(self)
+    }
+    pub fn encode_tuple_variant(
+        mut self,
+        _ty: TypeInfo,
+        variant: &'static str,
+        size: usize,
+    ) -> Result<TupleStructEncoder<'a, W>, Error<W::Error>> {
+        self.encode_compound_variant(variant)?;
+
+        self.0.push(Header::Array(Some(size)))?;
+        Ok(TupleStructEncoder(self.0))
+    }
+    pub fn encode_struct_variant(
+        mut self,
+        _ty: TypeInfo,
+        variant: &'static str,
+        size: usize,
+    ) -> Result<StructEncoder<'a, W>, Error<W::Error>> {
+        self.encode_compound_variant(variant)?;
+
+        self.0.push(Header::Map(Some(size)))?;
+        Ok(StructEncoder(self.0))
+    }
+
     pub fn encode_list(
         self,
         _ty: TypeInfo,
@@ -23,6 +90,42 @@ impl<'a, W: Write> Encoder<'a, W> {
     ) -> Result<ListEncoder<'a, W>, Error<W::Error>> {
         self.0.push(Header::Array(Some(len)))?;
         Ok(ListEncoder(self.0))
+    }
+}
+
+pub struct TupleStructEncoder<'a, W: Write>(&'a mut ciborium_ll::Encoder<W>);
+impl<'a, W: Write> TupleStructEncoder<'a, W> {
+    pub fn encode_field<D: ToGCbor>(&mut self, value: &D) -> Result<(), Error<W::Error>> {
+        value.encode(Encoder(&mut *self.0))
+    }
+    pub fn end(self) -> Result<(), Error<W::Error>> {
+        Ok(())
+    }
+}
+
+pub struct StructEncoder<'a, W: Write>(&'a mut ciborium_ll::Encoder<W>);
+impl<'a, W: Write> StructEncoder<'a, W> {
+    pub fn encode_field<D: ToGCbor>(
+        &mut self,
+        key: &'static str,
+        value: &D,
+    ) -> Result<(), Error<W::Error>> {
+        self.0.push(Header::Text(Some(key.len())))?;
+        self.0.write_all(key.as_bytes())?;
+        value.encode(Encoder(&mut *self.0))
+    }
+    pub fn encode_omissible_field<D: ToGCbor>(
+        &mut self,
+        key: &'static str,
+        value: &Option<D>,
+    ) -> Result<(), Error<W::Error>> {
+        match value {
+            Some(v) => self.encode_field(key, v),
+            None => Ok(()),
+        }
+    }
+    pub fn end(self) -> Result<(), Error<W::Error>> {
+        Ok(())
     }
 }
 

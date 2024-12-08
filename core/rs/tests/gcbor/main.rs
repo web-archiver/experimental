@@ -7,6 +7,9 @@ fn test_success<T: Debug + Eq + ToGCbor + DecodeSlice>(v: T, bin: &[u8]) {
     assert_eq!(from_slice::<T>(bin).unwrap(), v, "decode")
 }
 
+mod product;
+mod sum;
+
 #[test]
 fn null() {
     test_success((), include_bytes!("./data/null.bin"))

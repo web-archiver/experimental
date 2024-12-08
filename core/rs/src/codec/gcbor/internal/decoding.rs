@@ -1,9 +1,9 @@
-use std::{any::type_name, mem::MaybeUninit, ptr};
+use std::{any::type_name, borrow::Cow, fmt::Display, mem::MaybeUninit, ptr};
 
 pub use ciborium_io::Read;
 use ciborium_ll::{simple, Header};
 
-use crate::{bytes::ByteBuf, text::normalized::NFString};
+use crate::{bytes::ByteBuf, codec::gcbor::internal::ENUM_TAG, text::normalized::NFString};
 
 use super::TypeInfo;
 
@@ -36,6 +36,20 @@ impl<'a> Read for Reader<'a> {
     }
 }
 
+#[derive(Debug)]
+pub(crate) enum VariantKind {
+    Unit,
+    Compound,
+}
+impl Display for VariantKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Unit => "unit",
+            Self::Compound => "compound",
+        })
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum InnerError<E> {
     #[error("cbor error")]
@@ -58,12 +72,28 @@ pub(crate) enum InnerError<E> {
         actual: usize,
         expect: usize,
     },
+    #[error("{ty}: unexpected field {field:?}")]
+    UnexpectedField { ty: TypeInfo, field: String },
+    #[error("{ty}: missing field {field:?}")]
+    MissingField { ty: TypeInfo, field: &'static str },
+    #[error("{ty}: serialized record contains extra {count} fields")]
+    ExtraField { ty: TypeInfo, count: usize },
+    #[error("{ty}: unknown {kind} variant {variant:?}")]
+    UnknownVariant {
+        ty: TypeInfo,
+        kind: VariantKind,
+        variant: String,
+    },
     #[error("{ty}: {source}")]
     Custom {
         ty: TypeInfo,
         #[source]
         source: Box<dyn std::error::Error + 'static>,
     },
+}
+pub enum Enum<'t, 'd, R: Read> {
+    Unit(&'t str),
+    Compound(&'t str, Decoder<'d, R>),
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -80,6 +110,20 @@ impl<E> Error<E> {
     }
     pub(crate) fn io(source: E) -> Self {
         Self::from(InnerError::Cbor(ciborium_ll::Error::Io(source)))
+    }
+    pub fn unknown_variant<R: Read>(ty: TypeInfo, variant: Enum<R>) -> Self {
+        Self::from(match variant {
+            Enum::Unit(s) => InnerError::UnknownVariant {
+                ty,
+                kind: VariantKind::Unit,
+                variant: s.to_string(),
+            },
+            Enum::Compound(v, _) => InnerError::UnknownVariant {
+                ty,
+                kind: VariantKind::Compound,
+                variant: v.to_string(),
+            },
+        })
     }
 }
 impl<E> From<InnerError<E>> for Error<E> {
@@ -102,6 +146,47 @@ fn read_string<R: Read>(
             buf: e.into_bytes(),
         })
     })
+}
+
+fn read_str_buf<'a, R: Read>(
+    len: usize,
+    reader: &mut R,
+    buf: &'a mut [u8],
+) -> Result<Cow<'a, str>, Error<R::Error>> {
+    if len > buf.len() {
+        return Ok(Cow::Owned(read_string(
+            Vec::with_capacity(len),
+            len,
+            reader,
+        )?));
+    }
+    let buf = &mut buf[0..len];
+    reader.read_exact(buf).map_err(Error::io)?;
+    match std::str::from_utf8(buf) {
+        Ok(v) => Ok(Cow::Borrowed(v)),
+        Err(e) => Err(Error::from(InnerError::Utf8Error {
+            buf: buf.to_owned(),
+            source: e,
+        })),
+    }
+}
+fn decode_str_buf<'a, R: Read>(
+    ty: TypeInfo,
+    expected: &'static str,
+    decoder: &mut ciborium_ll::Decoder<R>,
+    buf: &'a mut [u8],
+) -> Result<Cow<'a, str>, Error<R::Error>> {
+    let len = match decoder.pull().map_err(InnerError::Cbor)? {
+        Header::Text(Some(len)) => len,
+        h => {
+            return Err(Error::from(InnerError::TypeError {
+                ty,
+                expected,
+                actual: h,
+            }))
+        }
+    };
+    read_str_buf(len, decoder, buf)
 }
 
 pub struct Decoder<'a, R: Read>(pub(crate) &'a mut ciborium_ll::Decoder<R>);
@@ -133,6 +218,121 @@ impl<'a, R: Read> Decoder<'a, R> {
         }
     }
 
+    pub fn decode_tuple_struct_len(
+        self,
+        ty: TypeInfo,
+        size: usize,
+    ) -> Result<TupleStructDecoder<'a, R>, Error<R::Error>> {
+        match self.0.pull().map_err(InnerError::Cbor)? {
+            Header::Array(Some(v)) => {
+                if v == size {
+                    Ok(TupleStructDecoder(self.0))
+                } else {
+                    Err(Error::from(InnerError::SizeMismatch {
+                        ty,
+                        actual: v,
+                        expect: size,
+                    }))
+                }
+            }
+            h => Err(Error::from(InnerError::TypeError {
+                ty,
+                expected: "array of fields",
+                actual: h,
+            })),
+        }
+    }
+    pub fn decode_struct<'f>(
+        self,
+        ty: TypeInfo,
+        field_buf: &'f mut [u8],
+        to_index: impl FnOnce(&str) -> Option<usize>,
+    ) -> Result<StructDecoder<'a, 'f, R>, Error<R::Error>> {
+        let remaining = match self.0.pull().map_err(InnerError::Cbor)? {
+            Header::Map(Some(l)) => l,
+            h => {
+                return Err(Error::from(InnerError::TypeError {
+                    ty,
+                    expected: "map of fields",
+                    actual: h,
+                }))
+            }
+        };
+        if remaining == 0 {
+            Ok(StructDecoder {
+                ty,
+                field_index: usize::MAX,
+                remaining,
+                field_buf,
+                decoder: self.0,
+            })
+        } else {
+            let field_index = match decode_str_buf(ty, "field key", self.0, field_buf)? {
+                Cow::Borrowed(f) => match to_index(f) {
+                    Some(idx) => idx,
+                    None => {
+                        return Err(Error::from(InnerError::UnexpectedField {
+                            ty,
+                            field: f.to_owned(),
+                        }))
+                    }
+                },
+                Cow::Owned(f) => {
+                    return Err(Error::from(InnerError::UnexpectedField { ty, field: f }))
+                }
+            };
+            Ok(StructDecoder {
+                ty,
+                field_index,
+                remaining: remaining - 1,
+                field_buf,
+                decoder: self.0,
+            })
+        }
+    }
+
+    pub fn decode_enum<'t>(
+        self,
+        ty: TypeInfo,
+        variant_buf: &'t mut [u8],
+    ) -> Result<Enum<'t, 'a, R>, Error<R::Error>> {
+        match self.0.pull().map_err(InnerError::Cbor)? {
+            Header::Text(Some(len)) => match read_str_buf(len, self.0, variant_buf)? {
+                Cow::Borrowed(v) => Ok(Enum::Unit(v)),
+                Cow::Owned(o) => Err(Error::from(InnerError::UnknownVariant {
+                    ty,
+                    kind: VariantKind::Unit,
+                    variant: o,
+                })),
+            },
+            Header::Tag(ENUM_TAG) => {
+                match self.0.pull().map_err(InnerError::Cbor)? {
+                    Header::Array(Some(2)) => (),
+                    h => {
+                        return Err(Error::from(InnerError::TypeError {
+                            ty,
+                            expected: "tuple of variant name and variant content",
+                            actual: h,
+                        }))
+                    }
+                }
+                match decode_str_buf(ty, "variant name", self.0, variant_buf)? {
+                    Cow::Borrowed(v) => Ok(Enum::Compound(v, self)),
+                    Cow::Owned(v) => Err(Error::from(InnerError::UnknownVariant {
+                        ty,
+                        kind: VariantKind::Compound,
+                        variant: v,
+                    })),
+                }
+            }
+            h => Err(Error::from(InnerError::TypeError {
+                ty,
+                expected: "text or enum tag",
+                actual: h,
+            })),
+        }
+    }
+
     pub fn decode_list(self, ty: TypeInfo) -> Result<(usize, ListDecoder<'a, R>), Error<R::Error>> {
         match self.0.pull().map_err(InnerError::Cbor)? {
             Header::Array(Some(l)) => Ok((l, ListDecoder(self.0))),
@@ -156,6 +356,96 @@ impl<'a, R: Read> Decoder<'a, R> {
                 ty,
                 actual: actual_len,
                 expect: len,
+            }))
+        }
+    }
+}
+
+pub struct TupleStructDecoder<'a, R: Read>(&'a mut ciborium_ll::Decoder<R>);
+impl<'a, R: Read> TupleStructDecoder<'a, R> {
+    pub fn next_field<F: FromGCbor<R>>(&mut self) -> Result<F, Error<R::Error>> {
+        F::decode(Decoder(&mut *self.0))
+    }
+    pub fn end(self) -> Result<(), Error<R::Error>> {
+        Ok(())
+    }
+}
+
+pub struct StructDecoder<'a, 'f, R: Read> {
+    ty: TypeInfo,
+    /// [usize::MAX] is end marker
+    field_index: usize,
+    remaining: usize,
+    field_buf: &'f mut [u8],
+    decoder: &'a mut ciborium_ll::Decoder<R>,
+}
+impl<'a, 'f, R: Read> StructDecoder<'a, 'f, R> {
+    fn next_key(
+        &mut self,
+        to_index: impl FnOnce(&str) -> Option<usize>,
+    ) -> Result<(), Error<R::Error>> {
+        if self.remaining == 0 {
+            self.field_index = usize::MAX;
+            return Ok(());
+        }
+        let field = match decode_str_buf(self.ty, "field key", self.decoder, self.field_buf)? {
+            Cow::Borrowed(f) => f,
+            Cow::Owned(o) => {
+                return Err(Error::from(InnerError::UnexpectedField {
+                    ty: self.ty,
+                    field: o,
+                }))
+            }
+        };
+        match to_index(field) {
+            Some(idx) if idx > self.field_index => {
+                self.field_index = idx;
+                self.remaining -= 1;
+                Ok(())
+            }
+            _ => Err(Error::from(InnerError::UnexpectedField {
+                ty: self.ty,
+                field: field.to_owned(),
+            })),
+        }
+    }
+
+    pub fn next_required_field<F: FromGCbor<R>>(
+        &mut self,
+        to_index: impl FnOnce(&str) -> Option<usize>,
+        index: usize,
+        field: &'static str,
+    ) -> Result<F, Error<R::Error>> {
+        if self.field_index == index {
+            let ret = F::decode(Decoder(&mut *self.decoder))?;
+            self.next_key(to_index)?;
+            Ok(ret)
+        } else {
+            Err(Error::from(InnerError::MissingField { ty: self.ty, field }))
+        }
+    }
+    pub fn next_omissible_field<F: FromGCbor<R>>(
+        &mut self,
+        to_index: impl FnOnce(&str) -> Option<usize>,
+        index: usize,
+        _field: &'static str,
+    ) -> Result<Option<F>, Error<R::Error>> {
+        if index < self.field_index {
+            Ok(None)
+        } else {
+            // index == self.field_index
+            let ret = F::decode(Decoder(&mut *self.decoder))?;
+            self.next_key(to_index)?;
+            Ok(Some(ret))
+        }
+    }
+    pub fn end(self) -> Result<(), Error<R::Error>> {
+        if self.remaining == 0 {
+            Ok(())
+        } else {
+            Err(Error::from(InnerError::ExtraField {
+                ty: self.ty,
+                count: self.remaining,
             }))
         }
     }

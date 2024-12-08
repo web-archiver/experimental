@@ -11,13 +11,22 @@ reexport in that crate as a temporary measure.
 use std::convert::Infallible;
 
 #[doc(inline)]
-pub use self::internal::{decoding::DecodeSlice, encoding::ToGCbor};
+pub use self::internal::{cmp::GCborOrd, decoding::DecodeSlice, encoding::ToGCbor};
+
+/// Shorthand for deriving both [DecodeSlice] and [ToGCbor]
+pub use webar_core_macros::GCborCodec;
+#[doc(inline)]
+pub use webar_core_macros::{FromGCbor, ToGCbor};
 
 pub mod internal {
+    const ENUM_TAG: u64 = 27;
     const UUID_TAG: u64 = 37;
+
+    pub extern crate core;
 
     pub type TypeInfo = &'static str;
 
+    pub mod cmp;
     pub mod decoding;
     pub mod encoding;
 }

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["core/rs"]
+members = ["core/rs-internal", "core/rs-macros", "core/rs"]
 
 
 [workspace.package]
