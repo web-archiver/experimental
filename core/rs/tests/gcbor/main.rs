@@ -320,3 +320,55 @@ mod uuid {
         test_success(Uuid::max(), include_bytes!("./data/uuid_max.bin"))
     }
 }
+
+mod gcbor_set {
+    use webar_core::codec::gcbor::set::GCborSet;
+
+    use crate::test_success;
+
+    #[test]
+    fn empty() {
+        test_success(
+            GCborSet::<i8>::new(),
+            include_bytes!("./data/set_empty.bin"),
+        )
+    }
+
+    #[test]
+    fn s123() {
+        test_success(
+            GCborSet::from([-3, -2, -1, 0, 1, 2, 3]),
+            include_bytes!("./data/set_123.bin"),
+        )
+    }
+}
+
+mod gcbor_map {
+    use webar_core::codec::gcbor::map::GCborMap;
+
+    use crate::test_success;
+
+    #[test]
+    fn empty() {
+        test_success(
+            GCborMap::<i8, u8>::new(),
+            include_bytes!("./data/map_empty.bin"),
+        )
+    }
+
+    #[test]
+    fn m123() {
+        test_success(
+            GCborMap::from([
+                (-3i8, 6u8),
+                (-2, 5),
+                (-1, 4),
+                (0, 0),
+                (1, 1),
+                (2, 2),
+                (3, 3),
+            ]),
+            include_bytes!("./data/map_123.bin"),
+        )
+    }
+}

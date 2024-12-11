@@ -8,7 +8,7 @@ like [crate::Timestamp] can be handled. For types in other crates that require
 manual encode and decode, define them here and add `#[doc(hidden)]` and
 reexport in that crate as a temporary measure.
  */
-use std::convert::Infallible;
+use std::{borrow::Borrow, convert::Infallible};
 
 #[doc(inline)]
 pub use self::internal::{cmp::GCborOrd, decoding::DecodeSlice, encoding::ToGCbor};
@@ -30,6 +30,55 @@ pub mod internal {
     pub mod decoding;
     pub mod encoding;
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(transparent)]
+struct Key<V>(V);
+impl<V: GCborOrd> PartialOrd for Key<V> {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.0.cmp_gcbor(&other.0))
+    }
+}
+impl<V: GCborOrd> Ord for Key<V> {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.0.cmp_gcbor(&other.0)
+    }
+}
+
+#[derive(PartialEq, Eq)]
+#[repr(transparent)]
+struct KeyBorrow<V: ?Sized>(V);
+impl<V: ?Sized> KeyBorrow<V> {
+    fn new(v: &V) -> &Self {
+        unsafe { std::mem::transmute(v) }
+    }
+}
+impl<V: GCborOrd + ?Sized> PartialOrd for KeyBorrow<V> {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.0.cmp_gcbor(&other.0))
+    }
+}
+impl<V: GCborOrd + ?Sized> Ord for KeyBorrow<V> {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.0.cmp_gcbor(&other.0)
+    }
+}
+impl<T, U: ?Sized> Borrow<KeyBorrow<U>> for Key<T>
+where
+    T: Borrow<U>,
+{
+    fn borrow(&self) -> &KeyBorrow<U> {
+        KeyBorrow::new(T::borrow(&self.0))
+    }
+}
+unsafe fn transmute_arr<const N: usize, S, D>(v: [S; N]) -> [D; N] {
+    let r = std::ptr::read(&v as *const [S; N] as *const [D; N]);
+    std::mem::forget(v);
+    r
+}
+
+pub mod map;
+pub mod set;
 
 pub fn to_vec<T: ToGCbor + ?Sized>(value: &T) -> Vec<u8> {
     struct VecWriter(Vec<u8>);

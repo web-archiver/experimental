@@ -23,6 +23,8 @@ import qualified Product
 import qualified Sum
 import Test.Hspec
 import Webar.Codec.GCbor
+import qualified Webar.Codec.GCbor.Map as M
+import qualified Webar.Codec.GCbor.Set as S
 import Webar.Text.Normalized (NFText, nfTxt)
 import qualified Webar.Text.Normalized as NF
 import Webar.Time
@@ -138,6 +140,28 @@ uuidTests = describe "uuid" do
   mkTest "v4" (UUID.fromWords64 0x9191_08f7_52d1_3320 0x5bac_f847_db41_48a8) "uuid_v4"
   mkTest "v7" (UUID.fromWords64 0x017f_22e2_79b0_7cc3 0x98c4_dc0c_0c07_398f) "uuid_v7"
 
+gcborSet :: Spec
+gcborSet = describe "Set" do
+  mkTest @(S.GCborSet Int8) "empty" S.empty "set_empty"
+  mkTest @(S.GCborSet Int8) "123" (S.fromList [-3, -2, -1, 0, 1, 2, 3]) "set_123"
+
+gcborMap :: Spec
+gcborMap = describe "Map" do
+  mkTest @(M.GCborMap Int8 Word8) "empty" M.empty "map_empty"
+  mkTest @(M.GCborMap Int8 Word8)
+    "123"
+    ( M.fromList
+        [ (-3, 6),
+          (-2, 5),
+          (-1, 4),
+          (0, 0),
+          (1, 1),
+          (2, 2),
+          (3, 3)
+        ]
+    )
+    "map_123"
+
 main :: IO ()
 main = hspec do
   mkTest "unit" () "null"
@@ -152,3 +176,5 @@ main = hspec do
   Sum.spec
   timeTests
   uuidTests
+  gcborSet
+  gcborMap

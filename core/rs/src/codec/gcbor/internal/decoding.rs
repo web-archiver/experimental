@@ -1,4 +1,4 @@
-use std::{any::type_name, borrow::Cow, fmt::Display, mem::MaybeUninit, ptr};
+use std::{any::type_name, borrow::Cow, fmt::Display, mem::MaybeUninit};
 
 pub use ciborium_io::Read;
 use ciborium_ll::{simple, Header};
@@ -518,11 +518,7 @@ impl<const N: usize, R: Read, T: FromGCbor<R>> FromGCbor<R> for [T; N] {
         for i in ret.iter_mut() {
             i.write(dec.next_element()?);
         }
-        unsafe {
-            let r = ptr::read(&ret as *const [MaybeUninit<T>; N] as *const [T; N]);
-            std::mem::forget(ret);
-            Ok(r)
-        }
+        Ok(unsafe { super::super::transmute_arr(ret) })
     }
 }
 

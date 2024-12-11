@@ -13,12 +13,15 @@ extra-source-files:
 library
     exposed-modules:
         Webar.Codec.GCbor
+        Webar.Codec.GCbor.Set
+        Webar.Codec.GCbor.Map
         Webar.Codec.GCbor.TH
         Webar.Text.Normalized
         Webar.Time
 
     hs-source-dirs:     src
     other-modules:
+        Webar.Codec.GCbor.Key
         Webar.Codec.GCbor.Internal.Ord
         Webar.Codec.GCbor.Internal.Encoding
         Webar.Codec.GCbor.Internal.Decoding
@@ -69,6 +72,7 @@ test-suite gcbor-ord
         base,
         text >=2.0.2 && <2.1,
         bytestring >=0.11.5 && <0.12,
+        uuid-types >=1.0.5 && <1.1,
         hspec >=2.11 && <2.12,
         QuickCheck >=2.14 && <2.15,
         webar-core
