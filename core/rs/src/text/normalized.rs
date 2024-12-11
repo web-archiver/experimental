@@ -21,7 +21,7 @@ impl Display for NFStr {
 impl NFStr {
     pub const fn from_str(s: &str) -> Result<&Self, NFStrError> {
         if s.is_ascii() {
-            Ok(unsafe { transmute(s) })
+            Ok(unsafe { transmute::<&str,&Self>(s) })
         } else {
             Err(NFStrError())
         }

@@ -47,6 +47,11 @@ impl<const N: usize, T: GCborOrd> From<[T; N]> for GCborSet<T> {
         }))
     }
 }
+impl<V> Default for GCborSet<V> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 const TAG: u64 = 258;
 impl<V: GCborOrd + ToGCbor> ToGCbor for GCborSet<V> {

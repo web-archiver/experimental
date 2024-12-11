@@ -50,6 +50,11 @@ impl<const N: usize, K: GCborOrd, V> From<[(K, V); N]> for GCborMap<K, V> {
         }))
     }
 }
+impl<K, V> Default for GCborMap<K, V> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 const TAG: u64 = 259;
 impl<K: ToGCbor + GCborOrd, V: ToGCbor> ToGCbor for GCborMap<K, V> {

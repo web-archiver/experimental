@@ -4,7 +4,7 @@ Encoder and decoder api is experimental and should use proc-macro instead.
 
 May split into separate crate and reexport there when encoder and decoder api is stabilized.
 Now we put these in core so that types that require manual encode and decode impl
-like [crate::Timestamp] can be handled. For types in other crates that require
+like [crate::time::Timestamp] can be handled. For types in other crates that require
 manual encode and decode, define them here and add `#[doc(hidden)]` and
 reexport in that crate as a temporary measure.
  */
@@ -36,7 +36,7 @@ pub mod internal {
 struct Key<V>(V);
 impl<V: GCborOrd> PartialOrd for Key<V> {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.0.cmp_gcbor(&other.0))
+        Some(std::cmp::Ord::cmp(self, other))
     }
 }
 impl<V: GCborOrd> Ord for Key<V> {
@@ -55,7 +55,7 @@ impl<V: ?Sized> KeyBorrow<V> {
 }
 impl<V: GCborOrd + ?Sized> PartialOrd for KeyBorrow<V> {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.0.cmp_gcbor(&other.0))
+        Some(std::cmp::Ord::cmp(self, other))
     }
 }
 impl<V: GCborOrd + ?Sized> Ord for KeyBorrow<V> {
