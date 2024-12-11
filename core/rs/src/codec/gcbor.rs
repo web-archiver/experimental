@@ -16,7 +16,7 @@ pub use self::internal::{cmp::GCborOrd, decoding::DecodeSlice, encoding::ToGCbor
 /// Shorthand for deriving both [DecodeSlice] and [ToGCbor]
 pub use webar_core_macros::GCborCodec;
 #[doc(inline)]
-pub use webar_core_macros::{FromGCbor, ToGCbor};
+pub use webar_core_macros::{FromGCbor, GCborOrd, ToGCbor};
 
 pub mod internal {
     const ENUM_TAG: u64 = 27;

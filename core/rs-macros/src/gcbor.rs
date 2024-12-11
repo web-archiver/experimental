@@ -41,6 +41,7 @@ struct EnumOptions {
     rename_variants: Option<Rename>,
 }
 
+mod cmp;
 mod decode;
 mod encode;
 mod generics;
@@ -154,4 +155,12 @@ pub fn derive_gcbor(
             decode::from_gcbor_impl(input),
         ],
     )
+}
+
+pub fn derive_gcbor_ord(
+    crate_name: &TokenStream,
+    parent_mod: &TokenStream,
+    input: DeriveInput,
+) -> TokenStream {
+    wrap(crate_name, parent_mod, &[cmp::gcbor_ord_impl(input)])
 }

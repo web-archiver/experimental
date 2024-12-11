@@ -78,3 +78,16 @@ mod bool {
 fn unit() {
     test_fixed(&(), &())
 }
+
+mod transparent_derive {
+    use crate::test_fixed;
+
+    #[derive(Debug, PartialEq, Eq, webar_core_macros::GCborCodec, webar_core_macros::GCborOrd)]
+    #[gcbor(transparent)]
+    struct Normal(i8);
+
+    #[test]
+    fn sample() {
+        test_fixed(&Normal(-1), &Normal(2))
+    }
+}
