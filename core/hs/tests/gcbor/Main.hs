@@ -25,6 +25,7 @@ import Test.Hspec
 import Webar.Codec.GCbor
 import qualified Webar.Codec.GCbor.Map as M
 import qualified Webar.Codec.GCbor.Set as S
+import Webar.Digest
 import Webar.Text.Normalized (NFText, nfTxt)
 import qualified Webar.Text.Normalized as NF
 import Webar.Time
@@ -162,6 +163,12 @@ gcborMap = describe "Map" do
     )
     "map_123"
 
+digestTests :: Spec
+digestTests = describe "digest" do
+  let sha256Abc = [sha256QQ|ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad|]
+  mkTest "sha256_abc" sha256Abc "sha256_abc"
+  mkTest "digest_sha256_abc" (DSha256 sha256Abc) "sha256_abc"
+
 main :: IO ()
 main = hspec do
   mkTest "unit" () "null"
@@ -178,3 +185,4 @@ main = hspec do
   uuidTests
   gcborSet
   gcborMap
+  digestTests

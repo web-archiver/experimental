@@ -1,5 +1,7 @@
 pub mod bytes;
 
+pub mod digest;
+
 pub mod codec {
     pub mod gcbor;
 }

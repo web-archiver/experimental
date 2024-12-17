@@ -16,6 +16,7 @@ library
         Webar.Codec.GCbor.Set
         Webar.Codec.GCbor.Map
         Webar.Codec.GCbor.TH
+        Webar.Digest
         Webar.Text.Normalized
         Webar.Time
 
@@ -35,6 +36,9 @@ library
         bytestring >=0.11.5 && <0.12,
         vector >=0.13.1 && <0.14,
         containers >=0.6.7 && <0.7,
+        memory >=0.18.0 && <0.19,
+        primitive >=0.9.0 && <0.10,
+        crypton >=1.0.1 && <1.1,
         aeson >=2.2.1 && <2.3,
         cborg >=0.2.10 && <0.3,
         uuid-types >=1.0.5 && <1.1,

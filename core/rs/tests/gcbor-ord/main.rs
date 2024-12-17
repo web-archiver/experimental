@@ -91,3 +91,21 @@ mod transparent_derive {
         test_fixed(&Normal(-1), &Normal(2))
     }
 }
+
+mod digest {
+    use webar_core::digest::{Digest, Sha256};
+
+    use crate::test_prop;
+
+    proptest::proptest! {
+        #[test]
+        fn sha256(s1: [u8; 32], s2: [u8; 32]) {
+            test_prop(&Sha256(s1), &Sha256(s2)).unwrap()
+        }
+
+        #[test]
+        fn digest(s1: [u8; 32], s2: [u8; 32]) {
+            test_prop(&Digest::Sha256(Sha256(s1)), &Digest::Sha256(Sha256(s2))).unwrap()
+        }
+    }
+}

@@ -4,6 +4,7 @@
 
 module Main (main) where
 
+import qualified Data.ByteString as BS
 import Data.Int (Int16, Int32, Int64, Int8)
 import Data.Maybe (fromJust)
 import qualified Data.Text as T
@@ -14,6 +15,7 @@ import Test.Hspec
 import Test.Hspec.QuickCheck
 import Test.QuickCheck
 import Webar.Codec.GCbor
+import Webar.Digest
 import qualified Webar.Text.Normalized as NF
 
 check :: (GCborOrd a, ToGCbor a) => a -> a -> Expectation
@@ -29,6 +31,15 @@ propTest f =
 
 fixedTest :: (GCborOrd a, ToGCbor a) => String -> a -> a -> Spec
 fixedTest name v1 v2 = it name (check v1 v2)
+
+newtype Sha256Val = Sha256Val {getSha256Val :: Sha256}
+  deriving (Show)
+
+instance Arbitrary Sha256Val where
+  arbitrary =
+    fmap
+      (Sha256Val . fromJust . sha256FromByteString . BS.pack)
+      (vectorOf 32 arbitrary)
 
 main :: IO ()
 main = hspec do
@@ -52,3 +63,6 @@ main = hspec do
     fixedTest "true_false" True False
     fixedTest "true_true" True True
   fixedTest "Unit" () ()
+  describe "digest" do
+    propTest getSha256Val
+    propTest (DSha256 . getSha256Val)

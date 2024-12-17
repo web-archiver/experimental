@@ -372,3 +372,27 @@ mod gcbor_map {
         )
     }
 }
+
+mod digest {
+    use webar_core::digest::{Digest, Sha256};
+
+    use crate::test_success;
+
+    /// sha256 of string abc
+    const SHA256_ABC: Sha256 = Sha256(hex_literal::hex!(
+        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+    ));
+
+    #[test]
+    fn sha256_abc() {
+        test_success(SHA256_ABC, include_bytes!("./data/sha256_abc.bin"))
+    }
+
+    #[test]
+    fn digest_sha256_abc() {
+        test_success(
+            Digest::Sha256(SHA256_ABC),
+            include_bytes!("./data/sha256_abc.bin"),
+        )
+    }
+}
