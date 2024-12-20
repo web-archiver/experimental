@@ -8,6 +8,7 @@ pub mod codec {
 
 pub mod text {
     pub mod normalized;
+    pub mod raw_utf8;
 }
 
 pub mod time;

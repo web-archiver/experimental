@@ -1,9 +1,6 @@
 use proptest::prelude::TestCaseError;
 
-use webar_core::{
-    codec::gcbor::{to_vec, GCborOrd, ToGCbor},
-    text::normalized::NFStr,
-};
+use webar_core::codec::gcbor::{to_vec, GCborOrd, ToGCbor};
 
 fn test_prop<T: ToGCbor + GCborOrd + ?Sized>(v1: &T, v2: &T) -> Result<(), TestCaseError> {
     proptest::prop_assert_eq!(v1.cmp_gcbor(v2), to_vec(v1).cmp(&to_vec(v2)));
@@ -23,10 +20,50 @@ macro_rules! simple_prop {
     };
 }
 
-proptest::proptest! {
-    #[test]
-    fn nf_str(s1 in "[[:ascii:]]*", s2 in "[[:ascii:]]*") {
-        test_prop(NFStr::from_str(&s1).unwrap(), NFStr::from_str(&s2).unwrap()).unwrap();
+mod text {
+    use webar_core::text::normalized::NFStr;
+
+    proptest::proptest! {
+        #[test]
+        fn nf_str(s1 in "[[:ascii:]]*", s2 in "[[:ascii:]]*") {
+            crate::test_prop(NFStr::new(&s1).unwrap(), NFStr::new(&s2).unwrap()).unwrap();
+        }
+    }
+
+    mod raw_utf8 {
+        use webar_core::{raw_utf8_str_ref, text::raw_utf8::RawUtf8StrRef};
+
+        use crate::test_fixed;
+
+        const S_ABC: RawUtf8StrRef<'static> = raw_utf8_str_ref!("abc");
+        const S_BA: RawUtf8StrRef<'static> = raw_utf8_str_ref!("ba");
+        const S_EMPTY: RawUtf8StrRef<'static> = raw_utf8_str_ref!("");
+        const S_A_0308: RawUtf8StrRef<'static> = raw_utf8_str_ref!("a\u{0308}");
+        const S_E_0323_0302: RawUtf8StrRef<'static> = raw_utf8_str_ref!("e\u{0323}\u{0302}");
+
+        #[test]
+        fn nn_abc_empty() {
+            test_fixed(&S_ABC, &S_EMPTY)
+        }
+        #[test]
+        fn nn_abc_ba() {
+            test_fixed(&S_ABC, &S_BA)
+        }
+
+        #[test]
+        fn un_abc_a() {
+            test_fixed(&S_ABC, &S_A_0308)
+        }
+
+        #[test]
+        fn nu_e_ba() {
+            test_fixed(&S_E_0323_0302, &S_BA)
+        }
+
+        #[test]
+        fn uu_a_e() {
+            test_fixed(&S_A_0308, &S_E_0323_0302)
+        }
     }
 }
 

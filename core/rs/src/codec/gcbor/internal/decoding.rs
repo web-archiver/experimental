@@ -91,6 +91,37 @@ pub(crate) enum InnerError<E> {
         source: Box<dyn std::error::Error + 'static>,
     },
 }
+impl<E> InnerError<E> {
+    pub(crate) fn map_io_err<F>(self, f: impl FnOnce(E) -> InnerError<F>) -> InnerError<F> {
+        match self {
+            Self::Cbor(e) => match e {
+                ciborium_ll::Error::Io(i) => f(i),
+                ciborium_ll::Error::Syntax(e) => InnerError::Cbor(ciborium_ll::Error::Syntax(e)),
+            },
+            Self::TypeError {
+                ty,
+                expected,
+                actual,
+            } => InnerError::TypeError {
+                ty,
+                expected,
+                actual,
+            },
+            Self::Utf8Error { buf, source } => InnerError::Utf8Error { buf, source },
+            Self::SizeMismatch { ty, actual, expect } => {
+                InnerError::SizeMismatch { ty, actual, expect }
+            }
+            Self::UnexpectedField { ty, field } => InnerError::UnexpectedField { ty, field },
+            Self::MissingField { ty, field } => InnerError::MissingField { ty, field },
+            Self::ExtraField { ty, count } => InnerError::ExtraField { ty, count },
+            Self::UnknownVariant { ty, kind, variant } => {
+                InnerError::UnknownVariant { ty, kind, variant }
+            }
+            Self::Custom { ty, source } => InnerError::Custom { ty, source },
+        }
+    }
+}
+
 pub enum Enum<'t, 'd, R: Read> {
     Unit(&'t str),
     Compound(&'t str, Decoder<'d, R>),

@@ -28,6 +28,8 @@ import qualified Webar.Codec.GCbor.Set as S
 import Webar.Digest
 import Webar.Text.Normalized (NFText, nfTxt)
 import qualified Webar.Text.Normalized as NF
+import Webar.Text.RawUtf8 (rawUtf8QQ)
+import qualified Webar.Text.RawUtf8 as RawUtf8Text
 import Webar.Time
 
 minMax :: Spec
@@ -89,8 +91,8 @@ integer = describe "integer" do
       Spec
     testVal a = mkTest (show a ++ "::" ++ show (typeOf a)) a
 
-text :: Spec
-text = describe "text" do
+nfText :: Spec
+nfText = describe "NFText" do
   test [nfTxt||] "empty_str"
   test [nfTxt|a|] "a"
   test [nfTxt|IETF|] "ietf"
@@ -101,6 +103,15 @@ text = describe "text" do
   where
     test :: NFText -> FilePath -> Spec
     test v = mkTest (show v) v
+
+rawUtf8Text :: Spec
+rawUtf8Text = describe "RawUtf8Text" do
+  mkTest "empty" [rawUtf8QQ||] "raw_utf8_empty"
+  mkTest "abc" [rawUtf8QQ|abc|] "raw_utf8_abc"
+  mkTest
+    "unnormalized"
+    (fromJust (RawUtf8Text.fromText "a\x0308"))
+    "raw_utf8_unnormalized"
 
 array :: Spec
 array = describe "array" do
@@ -173,7 +184,9 @@ main :: IO ()
 main = hspec do
   mkTest "unit" () "null"
   integer
-  text
+  describe "test" do
+    nfText
+    rawUtf8Text
   array
   bytes
   describe "bool" do

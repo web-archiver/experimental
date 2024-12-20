@@ -19,18 +19,23 @@ impl Display for NFStr {
     }
 }
 impl NFStr {
-    pub const fn from_str(s: &str) -> Result<&Self, NFStrError> {
-        if s.is_ascii() {
-            Ok(unsafe { transmute::<&str,&Self>(s) })
-        } else {
-            Err(NFStrError())
-        }
+    pub fn new(s: &str) -> Result<&Self, NFStrError> {
+        Self::new_const(s)
     }
     pub const fn as_str(&self) -> &str {
         &self.0
     }
     pub fn to_nf_string(&self) -> NFString {
         NFString(self.0.to_owned())
+    }
+
+    #[doc(hidden)]
+    pub const fn new_const(s: &str) -> Result<&Self, NFStrError> {
+        if s.is_ascii() {
+            Ok(unsafe { transmute::<&str, &Self>(s) })
+        } else {
+            Err(NFStrError())
+        }
     }
 }
 
@@ -44,7 +49,7 @@ pub mod internal {
 macro_rules! nf_str {
     ($l:expr) => {{
         use $crate::text::normalized::{internal, NFStr};
-        const S: &'static NFStr = match NFStr::from_str($l) {
+        const S: &'static NFStr = match NFStr::new_const($l) {
             internal::Result::Ok(v) => v,
             internal::Result::Err(_) => panic!("Invalid string"),
         };

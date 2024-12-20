@@ -18,6 +18,7 @@ library
         Webar.Codec.GCbor.TH
         Webar.Digest
         Webar.Text.Normalized
+        Webar.Text.RawUtf8
         Webar.Time
 
     hs-source-dirs:     src
@@ -42,6 +43,8 @@ library
         aeson >=2.2.1 && <2.3,
         cborg >=0.2.10 && <0.3,
         uuid-types >=1.0.5 && <1.1,
+        unicode-data >=0.6.0 && <0.7,
+        unicode-transforms >=0.4.0 && <0.5,
         template-haskell >=2.19.0 && <2.21
 
 test-suite gcbor

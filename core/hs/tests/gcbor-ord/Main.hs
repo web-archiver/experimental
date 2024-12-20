@@ -1,4 +1,6 @@
 {-# LANGUAGE BlockArguments #-}
+{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE QuasiQuotes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
 
@@ -17,6 +19,8 @@ import Test.QuickCheck
 import Webar.Codec.GCbor
 import Webar.Digest
 import qualified Webar.Text.Normalized as NF
+import Webar.Text.RawUtf8 (rawUtf8QQ)
+import qualified Webar.Text.RawUtf8 as RawUtf8
 
 check :: (GCborOrd a, ToGCbor a) => a -> a -> Expectation
 check v1 v2 =
@@ -41,9 +45,24 @@ instance Arbitrary Sha256Val where
       (Sha256Val . fromJust . sha256FromByteString . BS.pack)
       (vectorOf 32 arbitrary)
 
+rawUtf8Txt :: Spec
+rawUtf8Txt = describe "RawUtf8" do
+  let sAbc = [rawUtf8QQ|abc|]
+      sBa = [rawUtf8QQ|ba|]
+      sEmpty = [rawUtf8QQ||]
+      sA0308 = fromJust (RawUtf8.fromText "a\x0308")
+      sE0323_0302 = fromJust (RawUtf8.fromText "e\x0323\x0302")
+  fixedTest "nn_abc_empty" sAbc sEmpty
+  fixedTest "nn_abc_ba" sAbc sBa
+  fixedTest "un_abc_a" sAbc sA0308
+  fixedTest "nu_e_ba" sE0323_0302 sBa
+  fixedTest "uu_a_e" sA0308 sE0323_0302
+
 main :: IO ()
 main = hspec do
-  propTest (\(ASCIIString s) -> fromJust (NF.fromAscii (T.pack s)))
+  describe "text" do
+    propTest (\(ASCIIString s) -> fromJust (NF.fromAscii (T.pack s)))
+    rawUtf8Txt
   describe "Int" do
     propTest @Int8 id
     fixedTest @Int8 "negative_overflow" (-128) (-1)

@@ -6,6 +6,9 @@ fn test_success<T: Debug + Eq + ToGCbor + DecodeSlice>(v: T, bin: &[u8]) {
     assert_eq!(to_vec(&v), bin, "encode");
     assert_eq!(from_slice::<T>(bin).unwrap(), v, "decode")
 }
+fn encode_test<T: ToGCbor + ?Sized>(v: &T, bin: &[u8]) {
+    assert_eq!(to_vec(v), bin)
+}
 
 mod product;
 mod sum;
@@ -119,42 +122,97 @@ mod bool {
 }
 
 mod text {
-    macro_rules! mk_tests {
-        ($(($n:ident, $t:expr)),+) => {
-            mod string {
-                $(  #[test]
-                    fn $n() {
-                        crate::test_success(
-                            webar_core::text::normalized::nf_str!($t).to_nf_string(),
-                            include_bytes!(concat!("./data/", stringify!($n), ".bin")),
-                        )
-                    }
-                )+
-            }
+    mod normalized {
+        use webar_core::text::normalized::NFStr;
 
-            mod str {
-                $(
-                    #[test]
-                    fn $n() {
-                        assert_eq!(
-                            webar_core::codec::gcbor::to_vec(
-                                webar_core::text::normalized::nf_str!($t)
-                            ),
-                            include_bytes!(concat!("./data/", stringify!($n), ".bin"))
-                        )
-                    }
-                )+
+        struct TestCase(&'static NFStr, &'static [u8]);
+        impl TestCase {
+            fn test_string(self) {
+                crate::test_success(self.0.to_nf_string(), self.1)
             }
-        };
+            fn test_str(self) {
+                crate::encode_test(self.0, self.1)
+            }
+        }
+
+        macro_rules! mk_tests {
+            ($(($n:ident, $c:ident, $t:expr)),+) => {
+                $(const $c: TestCase = TestCase(
+                    webar_core::text::normalized::nf_str!($t),
+                    include_bytes!(concat!("./data/", stringify!($n), ".bin")),
+                );)+
+
+                mod string {
+                    $(  #[test]
+                        fn $n() {
+                            super::$c.test_string()
+                        }
+                    )+
+                }
+
+                mod str {
+                    $(
+                        #[test]
+                        fn $n() {
+                            super::$c.test_str()
+                        }
+                    )+
+                }
+            };
+        }
+
+        mk_tests!(
+            (empty_str, S_EMPTY, ""),
+            (a, S_A, "a"),
+            (ietf, S_IETF, "IETF"),
+            (escape_str, S_ESCAPE, "\"\\"),
+            (large_text, S_LARGE, include_str!("./data/large_text.txt"))
+        );
     }
 
-    mk_tests!(
-        (empty_str, ""),
-        (a, "a"),
-        (ietf, "IETF"),
-        (escape_str, "\"\\"),
-        (large_text, include_str!("./data/large_text.txt"))
-    );
+    mod raw_utf8 {
+        use webar_core::text::raw_utf8::{RawUtf8StrRef, RawUtf8String};
+
+        struct TestCase(RawUtf8StrRef<'static>, &'static [u8]);
+        impl TestCase {
+            fn test_string(self) {
+                crate::test_success(RawUtf8String::from(self.0), self.1)
+            }
+            fn test_str(self) {
+                crate::encode_test(&self.0, self.1)
+            }
+        }
+
+        macro_rules! mk_tests {
+            ($(($n:ident, $c:ident, $v:literal)),+) => {
+                $(const $c: TestCase = TestCase(
+                    webar_core::text::raw_utf8::raw_utf8_str_ref!($v),
+                    include_bytes!(concat!("./data/raw_utf8_", stringify!($n), ".bin"))
+                );)+
+
+                mod string {
+                    $(#[test]
+                        fn $n() {
+                            super::$c.test_string()
+                        }
+                    )+
+                }
+
+                mod str {
+                    $(#[test]
+                    fn $n() {
+                        super::$c.test_str()
+                    })+
+                }
+            };
+        }
+
+        mk_tests!(
+            (empty, T_EMPTY, ""),
+            (abc, T_ABC, "abc"),
+            (unnormalized, T_A_0308, "a\u{0308}")
+        );
+    }
 }
 
 mod bytes {
