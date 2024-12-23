@@ -71,33 +71,20 @@ impl<K: ToGCbor + GCborOrd, V: ToGCbor> ToGCbor for GCborMap<K, V> {
         Ok(())
     }
 }
-impl<R: ciborium_io::Read, K, V> FromGCbor<R> for GCborMap<K, V>
+impl<'buf, K, V> FromGCbor<'buf> for GCborMap<K, V>
 where
-    K: FromGCbor<R> + GCborOrd,
-    V: FromGCbor<R>,
+    K: FromGCbor<'buf> + GCborOrd,
+    V: FromGCbor<'buf>,
 {
-    fn decode(
-        decoder: decoding::Decoder<R>,
-    ) -> Result<Self, decoding::Error<<R as ciborium_io::Read>::Error>> {
-        match decoder.0.pull().map_err(decoding::InnerError::Cbor)? {
+    fn decode(decoder: decoding::Decoder<'_, 'buf>) -> Result<Self, decoding::Error> {
+        let ty = type_name::<Self>();
+        match decoder.0.pull(ty)? {
             Header::Tag(TAG) => (),
-            h => {
-                return Err(decoding::Error::from(decoding::InnerError::TypeError {
-                    ty: type_name::<Self>(),
-                    expected: "map tag 259",
-                    actual: h,
-                }))
-            }
+            h => return Err(decoding::Error::type_error(ty, "map tag 259", h)),
         }
-        let l = match decoder.0.pull().map_err(decoding::InnerError::Cbor)? {
+        let l = match decoder.0.pull(ty)? {
             Header::Map(Some(l)) => l,
-            h => {
-                return Err(decoding::Error::from(decoding::InnerError::TypeError {
-                    ty: type_name::<Self>(),
-                    expected: "map of elements",
-                    actual: h,
-                }))
-            }
+            h => return Err(decoding::Error::type_error(ty, "map of elements", h)),
         };
         let mut ret = BTreeMap::new();
         for _ in 0..l {

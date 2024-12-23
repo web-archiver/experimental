@@ -165,112 +165,59 @@ impl ToGCbor for RawUtf8String {
     }
 }
 
-struct LimReader<R>(usize, R);
-enum LimReadError<E> {
-    Inner(E),
-    Eof,
-}
-impl<R: ciborium_io::Read> ciborium_io::Read for LimReader<R> {
-    type Error = LimReadError<R::Error>;
-    fn read_exact(&mut self, data: &mut [u8]) -> Result<(), Self::Error> {
-        if data.len() <= self.0 {
-            self.1.read_exact(data).map_err(LimReadError::Inner)?;
-            self.0 -= data.len();
-            Ok(())
-        } else {
-            Err(LimReadError::Eof)
-        }
-    }
-}
 #[derive(Debug, thiserror::Error)]
 enum DecodeStringError {
     #[error("normalized status mismatch: expect {expect} ")]
     NormalizeMismatch { expect: bool },
     #[error("string contains unassigned character: {0:?}")]
     UnassignedChar(String),
-    #[error("Incomplete embedded string")]
-    Incomplete,
 }
-fn read_string<R: ciborium_io::Read>(
+fn read_string(
     normalized: bool,
     len: usize,
-    r: &mut R,
-) -> Result<RawUtf8String, decoding::InnerError<R::Error>> {
-    let mut buf = vec![0; len];
-    r.read_exact(&mut buf)
-        .map_err(|e| decoding::InnerError::Cbor(ciborium_ll::Error::Io(e)))?;
-    let s = match String::from_utf8(buf) {
-        Ok(s) => s,
-        Err(e) => {
-            return Err(decoding::InnerError::Utf8Error {
-                source: e.utf8_error(),
-                buf: e.into_bytes(),
-            })
-        }
-    };
-    if has_unassigned(&s) {
-        Err(decoding::InnerError::Custom {
-            ty: type_name::<RawUtf8String>(),
-            source: Box::from(DecodeStringError::UnassignedChar(s)),
-        })
-    } else if is_normalized(&s) == normalized {
+    r: &mut decoding::SliceDecoder,
+) -> Result<RawUtf8String, decoding::Error> {
+    let ty = type_name::<RawUtf8String>();
+    let s = r.read_str(ty, len)?;
+    if has_unassigned(s) {
+        Err(decoding::Error::custom(
+            ty,
+            DecodeStringError::UnassignedChar(s.to_string()),
+        ))
+    } else if is_normalized(s) == normalized {
         Ok(RawUtf8String {
             normalized,
-            string: s,
+            string: s.to_string(),
         })
     } else {
-        Err(decoding::InnerError::Custom {
-            ty: type_name::<RawUtf8String>(),
-            source: Box::from(DecodeStringError::NormalizeMismatch { expect: normalized }),
-        })
+        Err(decoding::Error::custom(
+            ty,
+            DecodeStringError::NormalizeMismatch { expect: normalized },
+        ))
     }
 }
-impl<R: ciborium_io::Read> FromGCbor<R> for RawUtf8String {
-    fn decode(
-        decoder: decoding::Decoder<R>,
-    ) -> Result<Self, decoding::Error<<R as ciborium_io::Read>::Error>> {
-        match decoder.0.pull().map_err(decoding::InnerError::Cbor)? {
+impl<'buf> FromGCbor<'buf> for RawUtf8String {
+    fn decode(decoder: decoding::Decoder<'_, 'buf>) -> Result<Self, decoding::Error> {
+        let ty = type_name::<Self>();
+        match decoder.0.pull(ty)? {
             Header::Text(Some(l)) => read_string(true, l, decoder.0).map_err(decoding::Error::from),
             Header::Tag(TAG) => {
-                let bytes_len = match decoder.0.pull().map_err(decoding::InnerError::Cbor)? {
+                let bytes_len = match decoder.0.pull(ty)? {
                     Header::Bytes(Some(l)) => l,
                     h => {
-                        return Err(decoding::Error::from(decoding::InnerError::TypeError {
-                            ty: type_name::<Self>(),
-                            expected: "bytes of embedded cbor string",
-                            actual: h,
-                        }))
+                        return Err(decoding::Error::type_error(
+                            ty,
+                            "bytes of embedded cbor string",
+                            h,
+                        ))
                     }
                 };
-                let mut decoder = ciborium_ll::Decoder::from(LimReader(bytes_len, decoder.0));
-                decoder
-                    .pull()
-                    .map_err(decoding::InnerError::Cbor)
-                    .and_then(|h| match h {
-                        Header::Text(Some(l)) => read_string(false, l, &mut decoder),
-                        h => Err(decoding::InnerError::TypeError {
-                            ty: type_name::<RawUtf8String>(),
-                            expected: "embedded string",
-                            actual: h,
-                        }),
-                    })
-                    .map_err(|e| {
-                        decoding::Error::from(e.map_io_err(|e| match e {
-                            LimReadError::Eof => decoding::InnerError::Custom {
-                                ty: type_name::<RawUtf8String>(),
-                                source: Box::from(DecodeStringError::Incomplete),
-                            },
-                            LimReadError::Inner(e) => {
-                                decoding::InnerError::Cbor(ciborium_ll::Error::Io(e))
-                            }
-                        }))
-                    })
+                decoder.0.isolate(ty, bytes_len, |d| match d.pull(ty)? {
+                    Header::Text(Some(len)) => read_string(false, len, d),
+                    h => Err(decoding::Error::type_error(ty, "embedded string", h)),
+                })
             }
-            h => Err(decoding::Error::from(decoding::InnerError::TypeError {
-                ty: type_name::<Self>(),
-                expected: "string or tag 24",
-                actual: h,
-            })),
+            h => Err(decoding::Error::type_error(ty, "string or tag 24", h)),
         }
     }
 }

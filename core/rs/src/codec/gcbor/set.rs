@@ -67,27 +67,16 @@ impl<V: GCborOrd + ToGCbor> ToGCbor for GCborSet<V> {
         Ok(())
     }
 }
-impl<R: ciborium_io::Read, V: GCborOrd + FromGCbor<R>> FromGCbor<R> for GCborSet<V> {
-    fn decode(decoder: decoding::Decoder<R>) -> Result<Self, decoding::Error<R::Error>> {
-        match decoder.0.pull().map_err(decoding::InnerError::Cbor)? {
+impl<'buf, V: GCborOrd + FromGCbor<'buf>> FromGCbor<'buf> for GCborSet<V> {
+    fn decode(decoder: decoding::Decoder<'_, 'buf>) -> Result<Self, decoding::Error> {
+        let ty = type_name::<Self>();
+        match decoder.0.pull(ty)? {
             Header::Tag(TAG) => (),
-            h => {
-                return Err(decoding::Error::from(decoding::InnerError::TypeError {
-                    ty: type_name::<Self>(),
-                    expected: "set tag 258",
-                    actual: h,
-                }))
-            }
+            h => return Err(decoding::Error::type_error(ty, "set tag 258", h)),
         }
-        let len = match decoder.0.pull().map_err(decoding::InnerError::Cbor)? {
+        let len = match decoder.0.pull(ty)? {
             Header::Array(Some(m)) => m,
-            h => {
-                return Err(decoding::Error::from(decoding::InnerError::TypeError {
-                    ty: type_name::<Self>(),
-                    expected: "array of elements",
-                    actual: h,
-                }))
-            }
+            h => return Err(decoding::Error::type_error(ty, "array of elements", h)),
         };
         let mut ret = BTreeSet::new();
         for _ in 0..len {

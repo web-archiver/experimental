@@ -146,23 +146,15 @@ fn derive_record(ty: &Expr, con: Path, fields: FieldsNamed, decoder: &Ident) -> 
         });
     }
 
-    let field_name_buf = Ident::new("__field_name_buf", Span::call_site());
     let ret = Ident::new("__ret", Span::call_site());
     Block {
         brace_token: Default::default(),
         stmts: Vec::from([
             Stmt::Item(syn::Item::Fn(match_fields(&field_to_idx, &fields))),
-            {
-                let field_mx = fields.iter().map(|v| v.name.len()).max().unwrap_or(0);
-                parse_quote! {
-                    let mut #field_name_buf = [0u8; #field_mx];
-                }
-            },
             parse_quote! {
                 let mut #dec = internal::decoding::Decoder::decode_struct(
                     #decoder,
                     #ty,
-                    &mut #field_name_buf,
                     #field_to_idx
                 )?;
             },
@@ -210,7 +202,6 @@ fn derive_enum(enum_opt: EnumOptions, e: DataEnum, decoder: &Ident) -> Block {
                 (v, name)
             })
             .collect::<Vec<_>>();
-    let name_len = variants.iter().map(|v| v.1.len()).max().unwrap_or(0);
     let mut arms = Vec::new();
     let type_name = Ident::new("__type", Span::call_site());
     let type_name_expr = Expr::Path(syn::ExprPath {
@@ -291,14 +282,10 @@ fn derive_enum(enum_opt: EnumOptions, e: DataEnum, decoder: &Ident) -> Block {
         ),
     });
 
-    let variant_name_buf = Ident::new("__name_buf", Span::call_site());
     Block {
         brace_token: Default::default(),
         stmts: Vec::from([
             local_def(type_name, self_type_name()),
-            parse_quote! {
-                let mut #variant_name_buf = [0u8; #name_len];
-            },
             Stmt::Expr(
                 Expr::Match(syn::ExprMatch {
                     attrs: Vec::new(),
@@ -307,7 +294,6 @@ fn derive_enum(enum_opt: EnumOptions, e: DataEnum, decoder: &Ident) -> Block {
                         internal::decoding::Decoder::decode_enum(
                             #decoder,
                             #type_name_expr,
-                            &mut #variant_name_buf
                         )?
                     },
                     brace_token: Default::default(),
@@ -376,7 +362,7 @@ pub fn from_gcbor_impl(input: DeriveInput) -> ItemImpl {
         syn::Data::Union(_) => panic!("Deriving union is not supported"),
     };
 
-    let reader = Ident::new("__Reader", Span::call_site());
+    let buf = syn::Lifetime::new("'__buf", Span::call_site());
 
     ItemImpl {
         attrs: Vec::from([super::auto_derive_attr()]),
@@ -388,46 +374,37 @@ pub fn from_gcbor_impl(input: DeriveInput) -> ItemImpl {
             input.generics.params.clone(),
         )),
         generics: {
-            let (mut params, where_clause) = generics::generics_bounds(
+            let (params, where_clause) = generics::generics_bounds(
                 &syn::TypeParamBound::Trait(syn::TraitBound {
                     paren_token: None,
                     modifier: syn::TraitBoundModifier::None,
                     lifetimes: None,
                     path: parse_quote! {
-                        internal::decoding::FromGCbor<#reader>
+                        internal::decoding::FromGCbor<#buf>
                     },
                 }),
                 input.generics,
             );
-            params.push(syn::GenericParam::Type(syn::TypeParam {
-                attrs: Vec::new(),
-                ident: reader.clone(),
-                colon_token: Some(Default::default()),
-                bounds: {
-                    let mut ret = Punctuated::new();
-                    ret.push(syn::TypeParamBound::Trait(syn::TraitBound {
-                        paren_token: None,
-                        modifier: syn::TraitBoundModifier::None,
-                        lifetimes: None,
-                        path: parse_quote! {
-                            internal::decoding::Read
-                        },
-                    }));
-                    ret
-                },
-                eq_token: None,
-                default: None,
-            }));
             syn::Generics {
                 lt_token: Some(Default::default()),
-                params,
+                params: {
+                    let mut ret = Punctuated::new();
+                    ret.push(syn::GenericParam::Lifetime(syn::LifetimeParam {
+                        attrs: Vec::new(),
+                        lifetime: buf.clone(),
+                        colon_token: None,
+                        bounds: Punctuated::new(),
+                    }));
+                    ret.extend(params);
+                    ret
+                },
                 gt_token: Some(Default::default()),
                 where_clause,
             }
         },
         trait_: Some((
             None,
-            parse_quote!(internal::decoding::FromGCbor<#reader>),
+            parse_quote!(internal::decoding::FromGCbor<#buf>),
             Default::default(),
         )),
         brace_token: Default::default(),
@@ -436,11 +413,11 @@ pub fn from_gcbor_impl(input: DeriveInput) -> ItemImpl {
             vis: syn::Visibility::Inherited,
             defaultness: None,
             sig: parse_quote! {
-                fn decode<'__dec>(
-                    #decoder : internal::decoding::Decoder<#reader>
+                fn decode(
+                    #decoder : internal::decoding::Decoder<'_, #buf>
                 ) -> internal::core::result::Result<
                     Self,
-                    internal::decoding::Error<#reader::Error>
+                    internal::decoding::Error
                 >
             },
             block: body,

@@ -3,7 +3,6 @@ use std::{
     sync::atomic::{AtomicU32, Ordering},
 };
 
-use ciborium_io::Read;
 use ciborium_ll::Header;
 use rustix::time;
 
@@ -14,29 +13,21 @@ use crate::codec::gcbor::internal::{
 
 const CLOCK_ID: time::ClockId = time::ClockId::Realtime;
 
-fn header_error<T, E>(expected: &'static str, h: Header) -> decoding::Error<E> {
-    decoding::Error::from(decoding::InnerError::TypeError {
-        ty: type_name::<T>(),
-        expected,
-        actual: h,
-    })
-}
-
 macro_rules! decode_header {
-    ($d:ident, $e:literal, $p:pat) => {
-        match $d.0.pull().map_err(decoding::InnerError::Cbor)? {
+    ($ty:ident, $d:ident, $e:literal, $p:pat) => {
+        match $d.0.pull($ty)? {
             $p => (),
-            h => return Err(header_error::<Self, _>($e, h)),
+            h => return Err(decoding::Error::type_error($ty, $e, h)),
         }
     };
 }
 macro_rules! decode_key {
-    ($d:ident, $f:literal, $p:pat) => {{
-        decode_header!($d, $f, $p);
+    ($ty:ident, $d:ident, $f:literal, $p:pat) => {{
+        decode_header!($ty, $d, $f, $p);
         FromGCbor::decode(decoding::Decoder(&mut *$d.0))
     }};
-    ($d:ident, $f:literal, $p:pat, $t:ident) => {{
-        decode_header!($d, $f, $p);
+    ($ty:ident, $d:ident, $f:literal, $p:pat, $t:ident) => {{
+        decode_header!($ty, $d, $f, $p);
         $t::decode(decoding::Decoder(&mut *$d.0))
     }};
 }
@@ -70,17 +61,12 @@ impl UncertaintyTime {
 
         Ok(())
     }
-    fn decode<R: Read>(
-        decoder: decoding::Decoder<R>,
-    ) -> Result<Self, decoding::Error<<R as Read>::Error>> {
-        match decoder.0.pull().map_err(decoding::InnerError::Cbor)? {
-            Header::Map(Some(2)) => (),
-            h => return Err(header_error::<Self, _>("uncertainty map", h)),
-        }
-
+    fn decode(decoder: decoding::Decoder) -> Result<Self, decoding::Error> {
+        let ty = type_name::<Self>();
+        decode_header!(ty, decoder, "uncertainty map", Header::Map(Some(2)));
         Ok(Self {
-            secs: decode_key!(decoder, "seconds", SEC_KEY)?,
-            nanos: decode_key!(decoder, "nanoseconds", NANO_KEY)?,
+            secs: decode_key!(ty, decoder, "seconds", SEC_KEY)?,
+            nanos: decode_key!(ty, decoder, "nanoseconds", NANO_KEY)?,
         })
     }
 }
@@ -103,10 +89,9 @@ impl Timescale {
         (*self as u8).encode(encoder)
     }
 
-    fn decode<R: Read>(
-        decoder: decoding::Decoder<R>,
-    ) -> Result<Self, decoding::Error<<R as Read>::Error>> {
-        decode_header!(decoder, "timescale id", Header::Positive(0));
+    fn decode(decoder: decoding::Decoder) -> Result<Self, decoding::Error> {
+        let ty = type_name::<Self>();
+        decode_header!(ty, decoder, "timescale id", Header::Positive(0));
         Ok(Self::Utc)
     }
 }
@@ -193,20 +178,22 @@ impl ToGCbor for Timestamp {
         Ok(())
     }
 }
-impl<R: Read> FromGCbor<R> for Timestamp {
-    fn decode(decoder: decoding::Decoder<R>) -> Result<Self, decoding::Error<<R as Read>::Error>> {
-        decode_header!(decoder, "tag", Header::Tag(TIMESTAMP_TAG));
-        let known_uncertainty = match decoder.0.pull().map_err(decoding::InnerError::Cbor)? {
+impl<'buf> FromGCbor<'buf> for Timestamp {
+    fn decode(decoder: decoding::Decoder<'_, 'buf>) -> Result<Self, decoding::Error> {
+        let ty = type_name::<Self>();
+        decode_header!(ty, decoder, "tag", Header::Tag(TIMESTAMP_TAG));
+        let known_uncertainty = match decoder.0.pull(ty)? {
             Header::Map(Some(3)) => false,
             Header::Map(Some(4)) => true,
-            h => return Err(header_error::<Self, _>("map", h)),
+            h => return Err(decoding::Error::type_error(ty, "map", h)),
         };
 
         Ok(Self {
-            secs: decode_key!(decoder, "second key", SEC_KEY)?,
-            timescale: decode_key!(decoder, "timescale key", TIMESCALE_KEY, Timescale)?,
+            secs: decode_key!(ty, decoder, "second key", SEC_KEY)?,
+            timescale: decode_key!(ty, decoder, "timescale key", TIMESCALE_KEY, Timescale)?,
             uncertainty: if known_uncertainty {
                 TimeUncertainty::TuTime(decode_key!(
+                    ty,
                     decoder,
                     "time uncertainty key",
                     UNCERTAIN_KEY,
@@ -215,7 +202,7 @@ impl<R: Read> FromGCbor<R> for Timestamp {
             } else {
                 TimeUncertainty::Unknown
             },
-            nanos: decode_key!(decoder, "nanosecond key", NANO_KEY)?,
+            nanos: decode_key!(ty, decoder, "nanosecond key", NANO_KEY)?,
         })
     }
 }
@@ -237,10 +224,11 @@ impl ToGCbor for TimePeriod {
         self.1.encode(encoder)
     }
 }
-impl<R: Read> FromGCbor<R> for TimePeriod {
-    fn decode(decoder: decoding::Decoder<R>) -> Result<Self, decoding::Error<<R as Read>::Error>> {
-        decode_header!(decoder, "tag", Header::Tag(PERIOD_TAG));
-        decode_header!(decoder, "array", Header::Array(Some(2)));
+impl<'buf> FromGCbor<'buf> for TimePeriod {
+    fn decode(decoder: decoding::Decoder<'_, 'buf>) -> Result<Self, decoding::Error> {
+        let ty = type_name::<Self>();
+        decode_header!(ty, decoder, "tag", Header::Tag(PERIOD_TAG));
+        decode_header!(ty, decoder, "array", Header::Array(Some(2)));
 
         Ok(Self(
             Timestamp::decode(decoding::Decoder(&mut *decoder.0))?,

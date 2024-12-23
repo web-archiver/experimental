@@ -1,43 +1,25 @@
-use std::{any::type_name, borrow::Cow, fmt::Display, mem::MaybeUninit};
+use std::{any::type_name, fmt::Display, mem::MaybeUninit};
 
 pub use ciborium_io::Read;
 use ciborium_ll::{simple, Header};
 
-use crate::{bytes::ByteBuf, codec::gcbor::internal::ENUM_TAG, text::normalized::NFString};
+use crate::{
+    bytes::ByteBuf,
+    codec::gcbor::internal::ENUM_TAG,
+    text::normalized::{NFStr, NFString},
+};
 
 use super::TypeInfo;
 
 #[derive(Debug, thiserror::Error)]
 #[error("can't read {read_size} bytes from {remaining} bytes")]
-pub struct ReadError {
+struct ReadError {
     remaining: usize,
     read_size: usize,
 }
-pub struct Reader<'a>(&'a [u8]);
-impl<'a> Reader<'a> {
-    pub(in crate::codec::gcbor) fn new(data: &'a [u8]) -> Self {
-        Self(data)
-    }
-}
-impl<'a> Read for Reader<'a> {
-    type Error = ReadError;
-    fn read_exact(&mut self, data: &mut [u8]) -> Result<(), Self::Error> {
-        if self.0.len() >= data.len() {
-            let (h, t) = self.0.split_at(data.len());
-            data.copy_from_slice(h);
-            self.0 = t;
-            Ok(())
-        } else {
-            Err(ReadError {
-                read_size: data.len(),
-                remaining: self.0.len(),
-            })
-        }
-    }
-}
 
 #[derive(Debug)]
-pub(crate) enum VariantKind {
+enum VariantKind {
     Unit,
     Compound,
 }
@@ -51,12 +33,15 @@ impl Display for VariantKind {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum InnerError<E> {
-    #[error("cbor error")]
-    Cbor(#[source] ciborium_ll::Error<E>),
-    #[error("{ty}: expect {expected}, but got invalid header {actual:?}")]
+enum ErrorKind {
+    #[error("cbor syntax error at {0}")]
+    Cbor(usize),
+    #[error("io error: {0}")]
+    Io(#[source] ReadError),
+    #[error("{remaining} trailing bytes in isolated decoder")]
+    TrailingBytes { remaining: usize },
+    #[error("expect {expected}, but got invalid header {actual:?}")]
     TypeError {
-        ty: TypeInfo,
         expected: &'static str,
         actual: Header,
     },
@@ -66,186 +51,245 @@ pub(crate) enum InnerError<E> {
         #[source]
         source: std::str::Utf8Error,
     },
-    #[error("{ty}: size {actual} does not match expected {expect}")]
-    SizeMismatch {
-        ty: TypeInfo,
-        actual: usize,
-        expect: usize,
-    },
-    #[error("{ty}: unexpected field {field:?}")]
-    UnexpectedField { ty: TypeInfo, field: String },
-    #[error("{ty}: missing field {field:?}")]
-    MissingField { ty: TypeInfo, field: &'static str },
-    #[error("{ty}: serialized record contains extra {count} fields")]
-    ExtraField { ty: TypeInfo, count: usize },
-    #[error("{ty}: unknown {kind} variant {variant:?}")]
-    UnknownVariant {
-        ty: TypeInfo,
-        kind: VariantKind,
-        variant: String,
-    },
-    #[error("{ty}: {source}")]
-    Custom {
-        ty: TypeInfo,
-        #[source]
-        source: Box<dyn std::error::Error + 'static>,
-    },
+    #[error("size {actual} does not match expected {expect}")]
+    SizeMismatch { actual: usize, expect: usize },
+    #[error("unexpected field {field:?}")]
+    UnexpectedField { field: String },
+    #[error("missing field {field:?}")]
+    MissingField { field: &'static str },
+    #[error("serialized record contains extra {count} fields")]
+    ExtraField { count: usize },
+    #[error("unknown {kind} variant {variant:?}")]
+    UnknownVariant { kind: VariantKind, variant: String },
+    #[error("{0}")]
+    Custom(#[source] Box<dyn std::error::Error + 'static>),
 }
-impl<E> InnerError<E> {
-    pub(crate) fn map_io_err<F>(self, f: impl FnOnce(E) -> InnerError<F>) -> InnerError<F> {
-        match self {
-            Self::Cbor(e) => match e {
-                ciborium_ll::Error::Io(i) => f(i),
-                ciborium_ll::Error::Syntax(e) => InnerError::Cbor(ciborium_ll::Error::Syntax(e)),
-            },
-            Self::TypeError {
-                ty,
-                expected,
-                actual,
-            } => InnerError::TypeError {
-                ty,
-                expected,
-                actual,
-            },
-            Self::Utf8Error { buf, source } => InnerError::Utf8Error { buf, source },
-            Self::SizeMismatch { ty, actual, expect } => {
-                InnerError::SizeMismatch { ty, actual, expect }
-            }
-            Self::UnexpectedField { ty, field } => InnerError::UnexpectedField { ty, field },
-            Self::MissingField { ty, field } => InnerError::MissingField { ty, field },
-            Self::ExtraField { ty, count } => InnerError::ExtraField { ty, count },
-            Self::UnknownVariant { ty, kind, variant } => {
-                InnerError::UnknownVariant { ty, kind, variant }
-            }
-            Self::Custom { ty, source } => InnerError::Custom { ty, source },
-        }
+
+#[derive(Debug)]
+struct InnerError {
+    ty: TypeInfo,
+    kind: ErrorKind,
+}
+impl Display for InnerError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.ty, self.kind)
+    }
+}
+impl std::error::Error for InnerError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.kind.source()
     }
 }
 
-pub enum Enum<'t, 'd, R: Read> {
-    Unit(&'t str),
-    Compound(&'t str, Decoder<'d, R>),
+pub enum Enum<'buf, 'a> {
+    Unit(&'buf str),
+    Compound(&'buf str, Decoder<'a, 'buf>),
 }
 
 #[derive(Debug, thiserror::Error)]
 #[error(transparent)]
-pub struct Error<E>(Box<InnerError<E>>);
-#[doc(hidden)]
-impl<E> Error<E> {
-    fn prim_type_error<T: ?Sized>(expected: &'static str, h: Header) -> Self {
-        Self::from(InnerError::TypeError {
-            ty: type_name::<T>(),
-            expected,
-            actual: h,
+pub struct Error(Box<InnerError>);
+impl Error {
+    #[cold]
+    pub(crate) fn type_error(ty: TypeInfo, expected: &'static str, actual: Header) -> Self {
+        Self::from(InnerError {
+            ty,
+            kind: ErrorKind::TypeError { expected, actual },
         })
     }
-    pub(crate) fn io(source: E) -> Self {
-        Self::from(InnerError::Cbor(ciborium_ll::Error::Io(source)))
+    #[cold]
+    pub(crate) fn custom(
+        ty: TypeInfo,
+        err: impl Into<Box<dyn std::error::Error + 'static>>,
+    ) -> Self where {
+        Self::from(InnerError {
+            ty,
+            kind: ErrorKind::Custom(err.into()),
+        })
     }
-    pub fn unknown_variant<R: Read>(ty: TypeInfo, variant: Enum<R>) -> Self {
-        Self::from(match variant {
-            Enum::Unit(s) => InnerError::UnknownVariant {
-                ty,
-                kind: VariantKind::Unit,
-                variant: s.to_string(),
-            },
-            Enum::Compound(v, _) => InnerError::UnknownVariant {
-                ty,
-                kind: VariantKind::Compound,
-                variant: v.to_string(),
+
+    #[cold]
+    pub fn unknown_variant(ty: TypeInfo, variant: Enum) -> Self {
+        Self::from(InnerError {
+            ty,
+            kind: match variant {
+                Enum::Unit(v) => ErrorKind::UnknownVariant {
+                    kind: VariantKind::Unit,
+                    variant: v.to_string(),
+                },
+                Enum::Compound(v, _) => ErrorKind::UnknownVariant {
+                    kind: VariantKind::Compound,
+                    variant: v.to_string(),
+                },
             },
         })
     }
 }
-impl<E> From<InnerError<E>> for Error<E> {
-    fn from(value: InnerError<E>) -> Self {
+impl From<InnerError> for Error {
+    #[cold]
+    fn from(value: InnerError) -> Self {
         Self(Box::new(value))
     }
 }
 
-fn read_string<R: Read>(
-    mut buf: Vec<u8>,
-    len: usize,
-    reader: &mut R,
-) -> Result<String, Error<R::Error>> {
-    let old_len = buf.len();
-    buf.resize(len, 0);
-    reader.read_exact(&mut buf[old_len..]).map_err(Error::io)?;
-    String::from_utf8(buf).map_err(|e| {
-        Error::from(InnerError::Utf8Error {
-            source: e.utf8_error(),
-            buf: e.into_bytes(),
-        })
-    })
+pub(crate) struct SliceDecoder<'buf> {
+    offset: usize,
+    data: &'buf [u8],
 }
+impl<'buf> SliceDecoder<'buf> {
+    pub(crate) fn new(data: &'buf [u8]) -> Self {
+        Self { offset: 0, data }
+    }
 
-fn read_str_buf<'a, R: Read>(
-    len: usize,
-    reader: &mut R,
-    buf: &'a mut [u8],
-) -> Result<Cow<'a, str>, Error<R::Error>> {
-    if len > buf.len() {
-        return Ok(Cow::Owned(read_string(
-            Vec::with_capacity(len),
-            len,
-            reader,
-        )?));
-    }
-    let buf = &mut buf[0..len];
-    reader.read_exact(buf).map_err(Error::io)?;
-    match std::str::from_utf8(buf) {
-        Ok(v) => Ok(Cow::Borrowed(v)),
-        Err(e) => Err(Error::from(InnerError::Utf8Error {
-            buf: buf.to_owned(),
-            source: e,
-        })),
-    }
-}
-fn decode_str_buf<'a, R: Read>(
-    ty: TypeInfo,
-    expected: &'static str,
-    decoder: &mut ciborium_ll::Decoder<R>,
-    buf: &'a mut [u8],
-) -> Result<Cow<'a, str>, Error<R::Error>> {
-    let len = match decoder.pull().map_err(InnerError::Cbor)? {
-        Header::Text(Some(len)) => len,
-        h => {
-            return Err(Error::from(InnerError::TypeError {
-                ty,
-                expected,
-                actual: h,
-            }))
+    pub(crate) fn pull(&mut self, ty: TypeInfo) -> Result<Header, Error> {
+        struct Reader<'a, 'buf>(&'a mut SliceDecoder<'buf>);
+        impl<'a, 'buf> Read for Reader<'a, 'buf> {
+            type Error = ReadError;
+            fn read_exact(&mut self, data: &mut [u8]) -> Result<(), Self::Error> {
+                let l = data.len();
+                match self.0.data.split_at_checked(l) {
+                    Some((d, r)) => {
+                        data.copy_from_slice(d);
+                        self.0.offset += l;
+                        self.0.data = r;
+                        Ok(())
+                    }
+                    None => Err(ReadError {
+                        remaining: self.0.data.len(),
+                        read_size: l,
+                    }),
+                }
+            }
         }
-    };
-    read_str_buf(len, decoder, buf)
+        let offset = self.offset;
+        ciborium_ll::Decoder::from(Reader(self))
+            .pull()
+            .map_err(|e| {
+                Error::from(match e {
+                    ciborium_ll::Error::Io(e) => InnerError {
+                        ty,
+                        kind: ErrorKind::Io(e),
+                    },
+                    ciborium_ll::Error::Syntax(o) => InnerError {
+                        ty,
+                        kind: ErrorKind::Cbor(offset + o),
+                    },
+                })
+            })
+    }
+    pub(crate) fn read_bytes(&mut self, ty: TypeInfo, len: usize) -> Result<&'buf [u8], Error> {
+        match self.data.split_at_checked(len) {
+            Some((ret, rest)) => {
+                self.offset += len;
+                self.data = rest;
+                Ok(ret)
+            }
+            None => Err(Error::from(InnerError {
+                ty,
+                kind: ErrorKind::Io(ReadError {
+                    remaining: self.data.len(),
+                    read_size: len,
+                }),
+            })),
+        }
+    }
+    pub(crate) fn read_chunk<const N: usize>(
+        &mut self,
+        ty: TypeInfo,
+    ) -> Result<&'buf [u8; N], Error> {
+        match self.data.split_first_chunk() {
+            Some((ret, rest)) => {
+                self.offset += N;
+                self.data = rest;
+                Ok(ret)
+            }
+            None => Err(Error::from(InnerError {
+                ty,
+                kind: ErrorKind::Io(ReadError {
+                    remaining: self.data.len(),
+                    read_size: N,
+                }),
+            })),
+        }
+    }
+    pub(crate) fn read_str(&mut self, ty: TypeInfo, len: usize) -> Result<&'buf str, Error> {
+        let buf = self.read_bytes(ty, len)?;
+        std::str::from_utf8(buf).map_err(|e| {
+            Error::from(InnerError {
+                ty,
+                kind: ErrorKind::Utf8Error {
+                    buf: buf.to_owned(),
+                    source: e,
+                },
+            })
+        })
+    }
+    pub(crate) fn decode_str(
+        &mut self,
+        ty: TypeInfo,
+        expected: &'static str,
+    ) -> Result<&'buf str, Error> {
+        match self.pull(ty)? {
+            Header::Text(Some(len)) => self.read_str(ty, len),
+            h => Err(Error::type_error(ty, expected, h)),
+        }
+    }
+
+    pub(crate) fn isolate<R>(
+        &mut self,
+        ty: TypeInfo,
+        len: usize,
+        f: impl FnOnce(&mut Self) -> Result<R, Error>,
+    ) -> Result<R, Error> {
+        let base = self.offset;
+        let mut inner = SliceDecoder {
+            offset: 0,
+            data: self.read_bytes(ty, len)?,
+        };
+        match f(&mut inner) {
+            Ok(ret) if inner.data.is_empty() => Ok(ret),
+            Ok(_) => Err(Error::from(InnerError {
+                ty,
+                kind: ErrorKind::TrailingBytes {
+                    remaining: inner.data.len(),
+                },
+            })),
+            Err(e) => match e.0.as_ref() {
+                InnerError {
+                    ty,
+                    kind: ErrorKind::Cbor(off),
+                } => Err(Error::from(InnerError {
+                    ty,
+                    kind: ErrorKind::Cbor(base + off),
+                })),
+                _ => Err(e),
+            },
+        }
+    }
 }
 
-pub struct Decoder<'a, R: Read>(pub(crate) &'a mut ciborium_ll::Decoder<R>);
-impl<'a, R: Read> Decoder<'a, R> {
-    fn decode_unsigned<T: TryFrom<u64>>(self) -> Result<T, Error<R::Error>> {
-        match self.0.pull().map_err(InnerError::Cbor)? {
+pub struct Decoder<'a, 'buf>(pub(crate) &'a mut SliceDecoder<'buf>);
+impl<'a, 'buf> Decoder<'a, 'buf> {
+    fn decode_unsigned<T: TryFrom<u64>>(self) -> Result<T, Error> {
+        let ty = type_name::<T>();
+        match self.0.pull(ty)? {
             h @ Header::Positive(v) => match T::try_from(v) {
                 Ok(r) => Ok(r),
-                Err(_) => Err(Error::prim_type_error::<T>(
-                    "unsigned integer within limits",
-                    h,
-                )),
+                Err(_) => Err(Error::type_error(ty, "unsigned integer within limits", h)),
             },
-            h => Err(Error::prim_type_error::<T>("unsigned integer", h)),
+            h => Err(Error::type_error(ty, "unsigned integer", h)),
         }
     }
-    fn decode_signed<T: TryFrom<i64>>(self) -> Result<T, Error<R::Error>> {
-        let (h, v) = match self.0.pull().map_err(InnerError::Cbor)? {
+    fn decode_signed<T: TryFrom<i64>>(self) -> Result<T, Error> {
+        let ty = type_name::<T>();
+        let (h, v) = match self.0.pull(ty)? {
             h @ Header::Positive(v) if v <= (i64::MAX as u64) => (h, v as i64),
             h @ Header::Negative(v) if v <= ((i64::MIN as u64) ^ !0) => (h, (v ^ !0) as i64),
-            h => return Err(Error::prim_type_error::<T>("signed integer", h)),
+            h => return Err(Error::type_error(ty, "signed integer", h)),
         };
         match T::try_from(v) {
             Ok(r) => Ok(r),
-            Err(_) => Err(Error::prim_type_error::<T>(
-                "signed integer within limits",
-                h,
-            )),
+            Err(_) => Err(Error::type_error(ty, "signed integer within limits", h)),
         }
     }
 
@@ -253,263 +297,220 @@ impl<'a, R: Read> Decoder<'a, R> {
         self,
         ty: TypeInfo,
         size: usize,
-    ) -> Result<TupleStructDecoder<'a, R>, Error<R::Error>> {
-        match self.0.pull().map_err(InnerError::Cbor)? {
+    ) -> Result<TupleStructDecoder<'a, 'buf>, Error> {
+        match self.0.pull(ty)? {
             Header::Array(Some(v)) => {
                 if v == size {
                     Ok(TupleStructDecoder(self.0))
                 } else {
-                    Err(Error::from(InnerError::SizeMismatch {
+                    Err(Error::from(InnerError {
                         ty,
-                        actual: v,
-                        expect: size,
+                        kind: ErrorKind::SizeMismatch {
+                            actual: v,
+                            expect: size,
+                        },
                     }))
                 }
             }
-            h => Err(Error::from(InnerError::TypeError {
-                ty,
-                expected: "array of fields",
-                actual: h,
-            })),
+            h => Err(Error::type_error(ty, "array of fields", h)),
         }
     }
-    pub fn decode_struct<'f>(
+    pub fn decode_struct(
         self,
         ty: TypeInfo,
-        field_buf: &'f mut [u8],
         to_index: impl FnOnce(&str) -> Option<usize>,
-    ) -> Result<StructDecoder<'a, 'f, R>, Error<R::Error>> {
-        let remaining = match self.0.pull().map_err(InnerError::Cbor)? {
+    ) -> Result<StructDecoder<'a, 'buf>, Error> {
+        let remaining = match self.0.pull(ty)? {
             Header::Map(Some(l)) => l,
-            h => {
-                return Err(Error::from(InnerError::TypeError {
-                    ty,
-                    expected: "map of fields",
-                    actual: h,
-                }))
-            }
+            h => return Err(Error::type_error(ty, "map of fields", h)),
         };
         if remaining == 0 {
             Ok(StructDecoder {
                 ty,
                 field_index: usize::MAX,
                 remaining,
-                field_buf,
                 decoder: self.0,
             })
         } else {
-            let field_index = match decode_str_buf(ty, "field key", self.0, field_buf)? {
-                Cow::Borrowed(f) => match to_index(f) {
-                    Some(idx) => idx,
-                    None => {
-                        return Err(Error::from(InnerError::UnexpectedField {
-                            ty,
-                            field: f.to_owned(),
-                        }))
-                    }
-                },
-                Cow::Owned(f) => {
-                    return Err(Error::from(InnerError::UnexpectedField { ty, field: f }))
+            let field = self.0.decode_str(ty, "field key")?;
+            let field_index = match to_index(field) {
+                Some(idx) => idx,
+                None => {
+                    return Err(Error::from(InnerError {
+                        ty,
+                        kind: ErrorKind::UnexpectedField {
+                            field: field.to_owned(),
+                        },
+                    }))
                 }
             };
             Ok(StructDecoder {
                 ty,
                 field_index,
                 remaining: remaining - 1,
-                field_buf,
                 decoder: self.0,
             })
         }
     }
 
-    pub fn decode_enum<'t>(
-        self,
-        ty: TypeInfo,
-        variant_buf: &'t mut [u8],
-    ) -> Result<Enum<'t, 'a, R>, Error<R::Error>> {
-        match self.0.pull().map_err(InnerError::Cbor)? {
-            Header::Text(Some(len)) => match read_str_buf(len, self.0, variant_buf)? {
-                Cow::Borrowed(v) => Ok(Enum::Unit(v)),
-                Cow::Owned(o) => Err(Error::from(InnerError::UnknownVariant {
-                    ty,
-                    kind: VariantKind::Unit,
-                    variant: o,
-                })),
-            },
+    pub fn decode_enum(self, ty: TypeInfo) -> Result<Enum<'buf, 'a>, Error> {
+        match self.0.pull(ty)? {
+            Header::Text(Some(len)) => self.0.read_str(ty, len).map(Enum::Unit),
             Header::Tag(ENUM_TAG) => {
-                match self.0.pull().map_err(InnerError::Cbor)? {
+                match self.0.pull(ty)? {
                     Header::Array(Some(2)) => (),
                     h => {
-                        return Err(Error::from(InnerError::TypeError {
+                        return Err(Error::type_error(
                             ty,
-                            expected: "tuple of variant name and variant content",
-                            actual: h,
-                        }))
+                            "tuple of variant name and variant content",
+                            h,
+                        ))
                     }
                 }
-                match decode_str_buf(ty, "variant name", self.0, variant_buf)? {
-                    Cow::Borrowed(v) => Ok(Enum::Compound(v, self)),
-                    Cow::Owned(v) => Err(Error::from(InnerError::UnknownVariant {
-                        ty,
-                        kind: VariantKind::Compound,
-                        variant: v,
-                    })),
-                }
+                self.0
+                    .decode_str(ty, "variant name")
+                    .map(|v| Enum::Compound(v, self))
             }
-            h => Err(Error::from(InnerError::TypeError {
-                ty,
-                expected: "text or enum tag",
-                actual: h,
-            })),
+            h => Err(Error::type_error(ty, "text or enum tag", h)),
         }
     }
 
-    pub fn decode_list(self, ty: TypeInfo) -> Result<(usize, ListDecoder<'a, R>), Error<R::Error>> {
-        match self.0.pull().map_err(InnerError::Cbor)? {
+    pub fn decode_list(self, ty: TypeInfo) -> Result<(usize, ListDecoder<'a, 'buf>), Error> {
+        match self.0.pull(ty)? {
             Header::Array(Some(l)) => Ok((l, ListDecoder(self.0))),
-            h => Err(Error::from(InnerError::TypeError {
-                ty,
-                expected: "finite list",
-                actual: h,
-            })),
+            h => Err(Error::type_error(ty, "finite list", h)),
         }
     }
-    pub fn decode_list_len(
-        self,
-        ty: TypeInfo,
-        len: usize,
-    ) -> Result<ListDecoder<'a, R>, Error<R::Error>> {
+    pub fn decode_list_len(self, ty: TypeInfo, len: usize) -> Result<ListDecoder<'a, 'buf>, Error> {
         let (actual_len, ret) = self.decode_list(ty)?;
         if actual_len == len {
             Ok(ret)
         } else {
-            Err(Error::from(InnerError::SizeMismatch {
+            Err(Error::from(InnerError {
                 ty,
-                actual: actual_len,
-                expect: len,
+                kind: ErrorKind::SizeMismatch {
+                    actual: actual_len,
+                    expect: len,
+                },
             }))
         }
     }
 }
 
-pub struct TupleStructDecoder<'a, R: Read>(&'a mut ciborium_ll::Decoder<R>);
-impl<'a, R: Read> TupleStructDecoder<'a, R> {
-    pub fn next_field<F: FromGCbor<R>>(&mut self) -> Result<F, Error<R::Error>> {
+pub struct TupleStructDecoder<'a, 'buf>(&'a mut SliceDecoder<'buf>);
+impl<'a, 'buf> TupleStructDecoder<'a, 'buf> {
+    pub fn next_field<F: FromGCbor<'buf>>(&mut self) -> Result<F, Error> {
         F::decode(Decoder(&mut *self.0))
     }
-    pub fn end(self) -> Result<(), Error<R::Error>> {
+    pub fn end(self) -> Result<(), Error> {
         Ok(())
     }
 }
 
-pub struct StructDecoder<'a, 'f, R: Read> {
+pub struct StructDecoder<'a, 'buf> {
     ty: TypeInfo,
     /// [usize::MAX] is end marker
     field_index: usize,
     remaining: usize,
-    field_buf: &'f mut [u8],
-    decoder: &'a mut ciborium_ll::Decoder<R>,
+    decoder: &'a mut SliceDecoder<'buf>,
 }
-impl<'a, 'f, R: Read> StructDecoder<'a, 'f, R> {
-    fn next_key(
-        &mut self,
-        to_index: impl FnOnce(&str) -> Option<usize>,
-    ) -> Result<(), Error<R::Error>> {
+impl<'a, 'buf> StructDecoder<'a, 'buf> {
+    fn next_key(&mut self, to_index: impl FnOnce(&str) -> Option<usize>) -> Result<(), Error> {
         if self.remaining == 0 {
             self.field_index = usize::MAX;
             return Ok(());
         }
-        let field = match decode_str_buf(self.ty, "field key", self.decoder, self.field_buf)? {
-            Cow::Borrowed(f) => f,
-            Cow::Owned(o) => {
-                return Err(Error::from(InnerError::UnexpectedField {
-                    ty: self.ty,
-                    field: o,
-                }))
-            }
-        };
+
+        let field = self.decoder.decode_str(self.ty, "field key")?;
         match to_index(field) {
             Some(idx) if idx > self.field_index => {
                 self.field_index = idx;
                 self.remaining -= 1;
                 Ok(())
             }
-            _ => Err(Error::from(InnerError::UnexpectedField {
+            _ => Err(Error::from(InnerError {
                 ty: self.ty,
-                field: field.to_owned(),
+                kind: ErrorKind::UnexpectedField {
+                    field: field.to_owned(),
+                },
             })),
         }
     }
 
-    pub fn next_required_field<F: FromGCbor<R>>(
+    pub fn next_required_field<F: FromGCbor<'buf>>(
         &mut self,
         to_index: impl FnOnce(&str) -> Option<usize>,
         index: usize,
         field: &'static str,
-    ) -> Result<F, Error<R::Error>> {
+    ) -> Result<F, Error> {
         if self.field_index == index {
             let ret = F::decode(Decoder(&mut *self.decoder))?;
             self.next_key(to_index)?;
             Ok(ret)
         } else {
-            Err(Error::from(InnerError::MissingField { ty: self.ty, field }))
+            Err(Error::from(InnerError {
+                ty: self.ty,
+                kind: ErrorKind::MissingField { field },
+            }))
         }
     }
-    pub fn next_omissible_field<F: FromGCbor<R>>(
+    pub fn next_omissible_field<F: FromGCbor<'buf>>(
         &mut self,
         to_index: impl FnOnce(&str) -> Option<usize>,
         index: usize,
         _field: &'static str,
-    ) -> Result<Option<F>, Error<R::Error>> {
+    ) -> Result<Option<F>, Error> {
         if index < self.field_index {
             Ok(None)
         } else {
-            // index == self.field_index
+            debug_assert_eq!(index, self.field_index);
             let ret = F::decode(Decoder(&mut *self.decoder))?;
             self.next_key(to_index)?;
             Ok(Some(ret))
         }
     }
-    pub fn end(self) -> Result<(), Error<R::Error>> {
+    pub fn end(self) -> Result<(), Error> {
         if self.remaining == 0 {
             Ok(())
         } else {
-            Err(Error::from(InnerError::ExtraField {
+            Err(Error::from(InnerError {
                 ty: self.ty,
-                count: self.remaining,
+                kind: ErrorKind::ExtraField {
+                    count: self.remaining,
+                },
             }))
         }
     }
 }
 
-pub struct ListDecoder<'a, R: Read>(&'a mut ciborium_ll::Decoder<R>);
-impl<'a, R: Read> ListDecoder<'a, R> {
-    pub fn next_element<F: FromGCbor<R>>(&mut self) -> Result<F, Error<R::Error>> {
+pub struct ListDecoder<'a, 'buf>(&'a mut SliceDecoder<'buf>);
+impl<'a, 'buf> ListDecoder<'a, 'buf> {
+    pub fn next_element<F: FromGCbor<'buf>>(&mut self) -> Result<F, Error> {
         F::decode(Decoder(&mut *self.0))
     }
 }
 
-pub trait FromGCbor<R: Read>: Sized {
-    fn decode(decoder: Decoder<R>) -> Result<Self, Error<R::Error>>;
+pub trait FromGCbor<'buf>: Sized {
+    fn decode(decoder: Decoder<'_, 'buf>) -> Result<Self, Error>;
 }
+pub trait FromGCborSlice: for<'buf> FromGCbor<'buf> {}
+impl<T> FromGCborSlice for T where T: for<'buf> FromGCbor<'buf> {}
 
-pub trait DecodeSlice: for<'a> FromGCbor<Reader<'a>> {}
-impl<T> DecodeSlice for T where T: for<'a> FromGCbor<Reader<'a>> {}
-
-impl<R: Read> FromGCbor<R> for bool {
-    fn decode(decoder: Decoder<R>) -> Result<Self, Error<R::Error>> {
-        match decoder.0.pull().map_err(InnerError::Cbor)? {
+impl<'buf> FromGCbor<'buf> for bool {
+    fn decode(decoder: Decoder<'_, 'buf>) -> Result<Self, Error> {
+        let ty = type_name::<Self>();
+        match decoder.0.pull(ty)? {
             Header::Simple(simple::TRUE) => Ok(true),
             Header::Simple(simple::FALSE) => Ok(false),
-            h => Err(Error::prim_type_error::<bool>("bool", h)),
+            h => Err(Error::type_error(ty, "bool value", h)),
         }
     }
 }
 
 macro_rules! unsigned_impl {
     ($t:ty) => {
-        impl<R: Read> FromGCbor<R> for $t {
-            fn decode(decoder: Decoder<R>) -> Result<Self, Error<<R as Read>::Error>> {
+        impl<'buf> FromGCbor<'buf> for $t {
+            fn decode(decoder: Decoder<'_, 'buf>) -> Result<Self, Error> {
                 decoder.decode_unsigned()
             }
         }
@@ -522,8 +523,8 @@ unsigned_impl!(u64);
 
 macro_rules! signed_impl {
     ($t:ty) => {
-        impl<R: Read> FromGCbor<R> for $t {
-            fn decode(decoder: Decoder<R>) -> Result<Self, Error<<R as Read>::Error>> {
+        impl<'buf> FromGCbor<'buf> for $t {
+            fn decode(decoder: Decoder<'_, 'buf>) -> Result<Self, Error> {
                 decoder.decode_signed()
             }
         }
@@ -534,16 +535,37 @@ signed_impl!(i16);
 signed_impl!(i32);
 signed_impl!(i64);
 
-impl<R: Read> FromGCbor<R> for () {
-    fn decode(decoder: Decoder<R>) -> Result<Self, Error<<R as Read>::Error>> {
-        match decoder.0.pull().map_err(InnerError::Cbor)? {
+impl<'buf> FromGCbor<'buf> for () {
+    fn decode(decoder: Decoder<'_, 'buf>) -> Result<Self, Error> {
+        let ty = type_name::<Self>();
+        match decoder.0.pull(ty)? {
             Header::Simple(simple::NULL) => Ok(()),
-            h => Err(Error::prim_type_error::<()>("unit", h)),
+            h => Err(Error::type_error(ty, "unit", h)),
         }
     }
 }
-impl<const N: usize, R: Read, T: FromGCbor<R>> FromGCbor<R> for [T; N] {
-    fn decode(decoder: Decoder<R>) -> Result<Self, Error<<R as Read>::Error>> {
+
+impl<'buf> FromGCbor<'buf> for NFString {
+    fn decode(decoder: Decoder<'_, 'buf>) -> Result<Self, Error> {
+        match NFStr::new(decoder.0.decode_str(type_name::<Self>(), "ascii string")?) {
+            Ok(v) => Ok(v.to_nf_string()),
+            Err(e) => Err(Error::custom(type_name::<Self>(), e)),
+        }
+    }
+}
+
+impl<'buf> FromGCbor<'buf> for ByteBuf {
+    fn decode(decoder: Decoder<'_, 'buf>) -> Result<Self, Error> {
+        let ty = type_name::<Self>();
+        match decoder.0.pull(ty)? {
+            Header::Bytes(Some(len)) => decoder.0.read_bytes(ty, len).map(|b| ByteBuf(b.to_vec())),
+            h => Err(Error::type_error(ty, "bytes", h)),
+        }
+    }
+}
+
+impl<'buf, const N: usize, T: FromGCbor<'buf>> FromGCbor<'buf> for [T; N] {
+    fn decode(decoder: Decoder<'_, 'buf>) -> Result<Self, Error> {
         let mut dec = decoder.decode_list_len(type_name::<Self>(), N)?;
         let mut ret = unsafe { MaybeUninit::<[MaybeUninit<T>; N]>::uninit().assume_init() };
         for i in ret.iter_mut() {
@@ -552,47 +574,8 @@ impl<const N: usize, R: Read, T: FromGCbor<R>> FromGCbor<R> for [T; N] {
         Ok(unsafe { super::super::transmute_arr(ret) })
     }
 }
-
-impl<R: Read> FromGCbor<R> for NFString {
-    fn decode(decoder: Decoder<R>) -> Result<Self, Error<<R as Read>::Error>> {
-        let len = match decoder.0.pull().map_err(InnerError::Cbor)? {
-            Header::Text(Some(v)) => v,
-            h => {
-                return Err(Error::from(InnerError::TypeError {
-                    ty: type_name::<Self>(),
-                    expected: "string",
-                    actual: h,
-                }))
-            }
-        };
-        NFString::from_string(read_string(Vec::with_capacity(len), len, decoder.0)?).map_err(|e| {
-            Error::from(InnerError::Custom {
-                ty: type_name::<Self>(),
-                source: Box::from(e),
-            })
-        })
-    }
-}
-impl<R: Read> FromGCbor<R> for ByteBuf {
-    fn decode(decoder: Decoder<R>) -> Result<Self, Error<<R as Read>::Error>> {
-        let len = match decoder.0.pull().map_err(InnerError::Cbor)? {
-            Header::Bytes(Some(v)) => v,
-            h => {
-                return Err(Error::from(InnerError::TypeError {
-                    ty: type_name::<Self>(),
-                    expected: "bytes",
-                    actual: h,
-                }))
-            }
-        };
-        let mut ret = vec![0; len];
-        decoder.0.read_exact(&mut ret).map_err(Error::io)?;
-        Ok(ByteBuf(ret))
-    }
-}
-
-impl<R: Read, T: FromGCbor<R>> FromGCbor<R> for Vec<T> {
-    fn decode(decoder: Decoder<R>) -> Result<Self, Error<<R as Read>::Error>> {
+impl<'buf, T: FromGCbor<'buf>> FromGCbor<'buf> for Vec<T> {
+    fn decode(decoder: Decoder<'_, 'buf>) -> Result<Self, Error> {
         let (len, mut decoder) = decoder.decode_list(type_name::<Self>())?;
         let mut ret = Vec::with_capacity(len);
         for _ in 0..len {
@@ -602,29 +585,19 @@ impl<R: Read, T: FromGCbor<R>> FromGCbor<R> for Vec<T> {
     }
 }
 
-impl<R: Read> FromGCbor<R> for uuid::Uuid {
-    fn decode(decoder: Decoder<R>) -> Result<Self, Error<<R as Read>::Error>> {
-        match decoder.0.pull().map_err(InnerError::Cbor)? {
+impl<'buf> FromGCbor<'buf> for uuid::Uuid {
+    fn decode(decoder: Decoder<'_, 'buf>) -> Result<Self, Error> {
+        let ty = type_name::<Self>();
+        match decoder.0.pull(ty)? {
             Header::Tag(super::UUID_TAG) => (),
-            h => {
-                return Err(Error::from(InnerError::TypeError {
-                    ty: type_name::<Self>(),
-                    expected: "uuid tag",
-                    actual: h,
-                }))
-            }
+            h => return Err(Error::type_error(ty, "uuid tag", h)),
         }
-        match decoder.0.pull().map_err(InnerError::Cbor)? {
-            Header::Bytes(Some(16)) => {
-                let mut buf = [0; 16];
-                decoder.0.read_exact(&mut buf).map_err(Error::io)?;
-                Ok(uuid::Uuid::from_bytes(buf))
-            }
-            h => Err(Error::from(InnerError::TypeError {
-                ty: type_name::<Self>(),
-                expected: "16 bytes uuid",
-                actual: h,
-            })),
+        match decoder.0.pull(ty)? {
+            Header::Bytes(Some(16)) => decoder
+                .0
+                .read_chunk::<16>("16 bytes uuid")
+                .map(|v| uuid::Uuid::from_bytes(v.to_owned())),
+            h => Err(Error::type_error(ty, "16 bytes uuid", h)),
         }
     }
 }

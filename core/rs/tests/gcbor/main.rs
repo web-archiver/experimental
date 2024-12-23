@@ -1,8 +1,8 @@
 use std::fmt::Debug;
 
-use webar_core::codec::gcbor::{from_slice, to_vec, DecodeSlice, ToGCbor};
+use webar_core::codec::gcbor::{from_slice, to_vec, FromGCborSlice, ToGCbor};
 
-fn test_success<T: Debug + Eq + ToGCbor + DecodeSlice>(v: T, bin: &[u8]) {
+fn test_success<T: Debug + Eq + ToGCbor + FromGCborSlice>(v: T, bin: &[u8]) {
     assert_eq!(to_vec(&v), bin, "encode");
     assert_eq!(from_slice::<T>(bin).unwrap(), v, "decode")
 }

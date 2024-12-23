@@ -11,7 +11,7 @@ reexport in that crate as a temporary measure.
 use std::{borrow::Borrow, convert::Infallible};
 
 #[doc(inline)]
-pub use self::internal::{cmp::GCborOrd, decoding::DecodeSlice, encoding::ToGCbor};
+pub use self::internal::{cmp::GCborOrd, decoding::FromGCborSlice, encoding::ToGCbor};
 
 /// Shorthand for deriving both [DecodeSlice] and [ToGCbor]
 pub use webar_core_macros::GCborCodec;
@@ -101,10 +101,10 @@ pub fn to_vec<T: ToGCbor + ?Sized>(value: &T) -> Vec<u8> {
     writer.0
 }
 
-pub type DecodeSliceError = internal::decoding::Error<internal::decoding::ReadError>;
+pub type DecodeSliceError = internal::decoding::Error;
 
-pub fn from_slice<T: DecodeSlice>(slice: &[u8]) -> Result<T, DecodeSliceError> {
+pub fn from_slice<T: FromGCborSlice>(slice: &[u8]) -> Result<T, DecodeSliceError> {
     T::decode(internal::decoding::Decoder(
-        &mut ciborium_ll::Decoder::from(internal::decoding::Reader::new(slice)),
+        &mut internal::decoding::SliceDecoder::new(slice),
     ))
 }

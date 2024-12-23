@@ -1,6 +1,6 @@
 use std::{any::type_name, fmt::Debug};
 
-use ciborium_io::{Read, Write};
+use ciborium_io::Write;
 use ciborium_ll::Header;
 
 use crate::codec::gcbor::{
@@ -47,34 +47,21 @@ impl ToGCbor for Sha256 {
         Ok(())
     }
 }
-impl<R: Read> FromGCbor<R> for Sha256 {
-    fn decode(decoder: decoding::Decoder<R>) -> Result<Self, decoding::Error<<R as Read>::Error>> {
-        match decoder.0.pull().map_err(decoding::InnerError::Cbor)? {
+impl<'buf> FromGCbor<'buf> for Sha256 {
+    fn decode(decoder: decoding::Decoder<'_, 'buf>) -> Result<Self, decoding::Error> {
+        let ty = type_name::<Self>();
+        match decoder.0.pull(ty)? {
             Header::Tag(SHA256_TAG) => (),
-            h => {
-                return Err(decoding::Error::from(decoding::InnerError::TypeError {
-                    ty: type_name::<Self>(),
-                    expected: "sha256 tag",
-                    actual: h,
-                }))
-            }
+            h => return Err(decoding::Error::type_error(ty, "sha256 tag", h)),
         }
-        match decoder.0.pull().map_err(decoding::InnerError::Cbor)? {
+        match decoder.0.pull(ty)? {
             Header::Bytes(Some(SHA256_SIZE)) => (),
-            h => {
-                return Err(decoding::Error::from(decoding::InnerError::TypeError {
-                    ty: type_name::<Self>(),
-                    expected: "bytes of sha256 hash",
-                    actual: h,
-                }))
-            }
+            h => return Err(decoding::Error::type_error(ty, "bytes of sha256 hash", h)),
         }
-        let mut ret = [0; SHA256_SIZE];
         decoder
             .0
-            .read_exact(&mut ret)
-            .map_err(decoding::Error::io)?;
-        Ok(Self(ret))
+            .read_chunk::<SHA256_SIZE>(ty)
+            .map(|v| Self(v.to_owned()))
     }
 }
 
@@ -123,8 +110,8 @@ impl ToGCbor for Digest {
         }
     }
 }
-impl<R: Read> FromGCbor<R> for Digest {
-    fn decode(decoder: decoding::Decoder<R>) -> Result<Self, decoding::Error<<R as Read>::Error>> {
+impl<'buf> FromGCbor<'buf> for Digest {
+    fn decode(decoder: decoding::Decoder<'_, 'buf>) -> Result<Self, decoding::Error> {
         Sha256::decode(decoder).map(Self::Sha256)
     }
 }
