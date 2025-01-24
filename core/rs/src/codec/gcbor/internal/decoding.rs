@@ -4,7 +4,6 @@ pub use ciborium_io::Read;
 use ciborium_ll::{simple, Header};
 
 use crate::{
-    bytes::ByteBuf,
     codec::gcbor::internal::ENUM_TAG,
     text::normalized::{NFStr, NFString},
 };
@@ -550,16 +549,6 @@ impl<'buf> FromGCbor<'buf> for NFString {
         match NFStr::new(decoder.0.decode_str(type_name::<Self>(), "ascii string")?) {
             Ok(v) => Ok(v.to_nf_string()),
             Err(e) => Err(Error::custom(type_name::<Self>(), e)),
-        }
-    }
-}
-
-impl<'buf> FromGCbor<'buf> for ByteBuf {
-    fn decode(decoder: Decoder<'_, 'buf>) -> Result<Self, Error> {
-        let ty = type_name::<Self>();
-        match decoder.0.pull(ty)? {
-            Header::Bytes(Some(len)) => decoder.0.read_bytes(ty, len).map(|b| ByteBuf(b.to_vec())),
-            h => Err(Error::type_error(ty, "bytes", h)),
         }
     }
 }

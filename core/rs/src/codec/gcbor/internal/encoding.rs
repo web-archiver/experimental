@@ -4,10 +4,7 @@ pub use ciborium_io::Write;
 use ciborium_ll::Header;
 use uuid::Uuid;
 
-use crate::{
-    bytes::ByteBuf,
-    text::normalized::{NFStr, NFString},
-};
+use crate::text::normalized::{NFStr, NFString};
 
 use super::{TypeInfo, ENUM_TAG, UUID_TAG};
 
@@ -220,13 +217,6 @@ impl ToGCbor for NFStr {
 impl ToGCbor for NFString {
     fn encode<W: Write>(&self, encoder: Encoder<W>) -> Result<(), Error<W::Error>> {
         self.as_nf_str().encode(encoder)
-    }
-}
-
-impl ToGCbor for ByteBuf {
-    fn encode<W: Write>(&self, encoder: Encoder<W>) -> Result<(), Error<W::Error>> {
-        encoder.0.push(Header::Bytes(Some(self.0.len())))?;
-        encoder.0.write_all(&self.0).map_err(Error)
     }
 }
 
