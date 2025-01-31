@@ -125,7 +125,7 @@ fn derive_record(
             parse_quote! {
                 internal::encoding::StructEncoder::encode_omissible_field(
                     &mut #ser,
-                    #name,
+                    internal::nf_str!(#name),
                     #var
                 )?;
             }
@@ -133,7 +133,7 @@ fn derive_record(
             parse_quote! {
                 internal::encoding::StructEncoder::encode_field(
                     &mut #ser,
-                    #name,
+                    internal::nf_str!(#name),
                     #var
                 )?;
             }
@@ -244,14 +244,14 @@ fn derive_enum(e: DataEnum, enum_opt: EnumOptions, encoder: &Ident) -> Block {
                 Self::#ident => internal::encoding::Encoder::encode_unit_variant(
                     #encoder,
                     #type_var,
-                    #variant_name
+                    internal::nf_str!(#variant_name)
                 ),
             },
             Fields::Unnamed(u) if u.unnamed.len() == 1 => parse_quote! {
                 Self::#ident(__field) => internal::encoding::Encoder::encode_newtype_variant(
                     #encoder,
                     #type_var,
-                    #variant_name,
+                    internal::nf_str!(#variant_name),
                     __field
                 ),
             },
@@ -261,7 +261,7 @@ fn derive_enum(e: DataEnum, enum_opt: EnumOptions, encoder: &Ident) -> Block {
                         internal::encoding::Encoder::encode_tuple_variant(
                             #encoder,
                             #type_var,
-                            #variant_name,
+                            internal::nf_str!(#variant_name),
                             #s
                         )
                     }
@@ -285,7 +285,7 @@ fn derive_enum(e: DataEnum, enum_opt: EnumOptions, encoder: &Ident) -> Block {
                         internal::encoding::Encoder::encode_struct_variant(
                             #encoder,
                             #type_var,
-                            #variant_name,
+                            internal::nf_str!(#variant_name),
                             #s
                         )
                     }

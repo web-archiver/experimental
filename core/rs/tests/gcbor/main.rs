@@ -139,7 +139,7 @@ mod text {
             ($(($n:ident, $c:ident, $t:expr)),+) => {
                 $(const $c: TestCase = TestCase(
                     webar_core::text::normalized::nf_str!($t),
-                    include_bytes!(concat!("./data/", stringify!($n), ".bin")),
+                    include_bytes!(concat!("./data/str_", stringify!($n), ".bin")),
                 );)+
 
                 mod string {
@@ -162,32 +162,30 @@ mod text {
         }
 
         mk_tests!(
-            (empty_str, S_EMPTY, ""),
+            (empty, S_EMPTY, ""),
             (a, S_A, "a"),
             (ietf, S_IETF, "IETF"),
-            (escape_str, S_ESCAPE, "\"\\"),
-            (large_text, S_LARGE, include_str!("./data/large_text.txt"))
+            (escape, S_ESCAPE, "\"\\"),
+            (large, S_LARGE, include_str!("./data/large_text.txt"))
         );
     }
 
-    mod raw_utf8 {
-        use webar_core::text::raw_utf8::{RawUtf8StrRef, RawUtf8String};
-
-        struct TestCase(RawUtf8StrRef<'static>, &'static [u8]);
+    mod std_string {
+        struct TestCase(&'static str, &'static [u8]);
         impl TestCase {
             fn test_string(self) {
-                crate::test_success(RawUtf8String::from(self.0), self.1)
+                crate::test_success(String::from(self.0), self.1)
             }
             fn test_str(self) {
-                crate::encode_test(&self.0, self.1)
+                crate::encode_test(self.0, self.1)
             }
         }
 
         macro_rules! mk_tests {
             ($(($n:ident, $c:ident, $v:literal)),+) => {
                 $(const $c: TestCase = TestCase(
-                    webar_core::text::raw_utf8::raw_utf8_str_ref!($v),
-                    include_bytes!(concat!("./data/raw_utf8_", stringify!($n), ".bin"))
+                    $v,
+                    include_bytes!(concat!("./data/str_", stringify!($n), ".bin"))
                 );)+
 
                 mod string {
@@ -209,8 +207,8 @@ mod text {
 
         mk_tests!(
             (empty, T_EMPTY, ""),
-            (abc, T_ABC, "abc"),
-            (unnormalized, T_A_0308, "a\u{0308}")
+            (a, T_A, "a"),
+            (unnormalized_a_0308, T_A_0308, "a\u{0308}")
         );
     }
 }

@@ -29,32 +29,28 @@ impl NFStr {
         NFString(self.0.to_owned())
     }
 
-    #[doc(hidden)]
-    pub const fn new_const(s: &str) -> Result<&Self, NFStrError> {
+    const fn new_const(s: &str) -> Result<&Self, NFStrError> {
         if s.is_ascii() {
             Ok(unsafe { transmute::<&str, &Self>(s) })
         } else {
             Err(NFStrError())
         }
     }
-}
 
-#[doc(hidden)]
-pub mod internal {
-    pub use super::NFStr;
-    pub use std::result::Result;
+    #[doc(hidden)]
+    pub const fn new_const_throw(s: &str) -> &Self {
+        match Self::new_const(s) {
+            Ok(v) => v,
+            Err(_) => panic!("invalid normalized string"),
+        }
+    }
 }
 
 #[macro_export]
 macro_rules! nf_str {
-    ($l:expr) => {{
-        use $crate::text::normalized::{internal, NFStr};
-        const S: &'static NFStr = match NFStr::new_const($l) {
-            internal::Result::Ok(v) => v,
-            internal::Result::Err(_) => panic!("Invalid string"),
-        };
-        S
-    }};
+    ($l:expr) => {
+        const { $crate::text::normalized::NFStr::new_const_throw($l) }
+    };
 }
 
 #[derive(Debug, thiserror::Error)]

@@ -24,6 +24,8 @@ pub mod internal {
 
     pub extern crate core;
 
+    pub use crate::text::normalized::nf_str;
+
     pub type TypeInfo = &'static str;
 
     pub mod cmp;

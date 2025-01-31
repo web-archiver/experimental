@@ -30,39 +30,38 @@ mod text {
         }
     }
 
-    mod raw_utf8 {
-        use webar_core::{raw_utf8_str_ref, text::raw_utf8::RawUtf8StrRef};
+    mod std_string {
 
         use crate::test_fixed;
 
-        const S_ABC: RawUtf8StrRef<'static> = raw_utf8_str_ref!("abc");
-        const S_BA: RawUtf8StrRef<'static> = raw_utf8_str_ref!("ba");
-        const S_EMPTY: RawUtf8StrRef<'static> = raw_utf8_str_ref!("");
-        const S_A_0308: RawUtf8StrRef<'static> = raw_utf8_str_ref!("a\u{0308}");
-        const S_E_0323_0302: RawUtf8StrRef<'static> = raw_utf8_str_ref!("e\u{0323}\u{0302}");
+        const S_ABC: &str = "abc";
+        const S_BA: &str = "ba";
+        const S_EMPTY: &str = "";
+        const S_A_0308: &str = "a\u{0308}";
+        const S_E_0323_0302: &str = "e\u{0323}\u{0302}";
 
         #[test]
         fn nn_abc_empty() {
-            test_fixed(&S_ABC, &S_EMPTY)
+            test_fixed(S_ABC, S_EMPTY)
         }
         #[test]
         fn nn_abc_ba() {
-            test_fixed(&S_ABC, &S_BA)
+            test_fixed(S_ABC, S_BA)
         }
 
         #[test]
         fn un_abc_a() {
-            test_fixed(&S_ABC, &S_A_0308)
+            test_fixed(S_ABC, S_A_0308)
         }
 
         #[test]
         fn nu_e_ba() {
-            test_fixed(&S_E_0323_0302, &S_BA)
+            test_fixed(S_E_0323_0302, S_BA)
         }
 
         #[test]
         fn uu_a_e() {
-            test_fixed(&S_A_0308, &S_E_0323_0302)
+            test_fixed(S_A_0308, S_E_0323_0302)
         }
     }
 }

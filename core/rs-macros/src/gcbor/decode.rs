@@ -130,7 +130,7 @@ fn derive_record(ty: &Expr, con: Path, fields: FieldsNamed, decoder: &Ident) -> 
                         &mut #dec,
                         #field_to_idx,
                         #idx,
-                        #name
+                        internal::nf_str!(#name)
                     )?
                 }
             } else {
@@ -139,7 +139,7 @@ fn derive_record(ty: &Expr, con: Path, fields: FieldsNamed, decoder: &Ident) -> 
                         &mut #dec,
                         #field_to_idx,
                         #idx,
-                        #name
+                        internal::nf_str!(#name)
                     )?
                 }
             },

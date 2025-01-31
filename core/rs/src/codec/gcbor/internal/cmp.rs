@@ -16,6 +16,16 @@ impl GCborOrd for NFString {
         self.as_nf_str().cmp_gcbor(other.as_nf_str())
     }
 }
+impl GCborOrd for str {
+    fn cmp_gcbor(&self, other: &Self) -> Ordering {
+        webar_core_internal::cmp_cbor_str(self, other)
+    }
+}
+impl GCborOrd for String {
+    fn cmp_gcbor(&self, other: &Self) -> Ordering {
+        webar_core_internal::cmp_cbor_str(self.as_str(), other.as_str())
+    }
+}
 
 macro_rules! forward_ord {
     ($t:ty) => {

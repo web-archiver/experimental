@@ -7,7 +7,3 @@ pub fn cmp_cbor_str(s1: &str, s2: &str) -> Ordering {
         v => v,
     }
 }
-
-pub mod text {
-    pub mod raw_utf8;
-}

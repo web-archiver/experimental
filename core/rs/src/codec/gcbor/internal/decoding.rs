@@ -37,8 +37,6 @@ enum ErrorKind {
     Cbor(usize),
     #[error("io error: {0}")]
     Io(#[source] ReadError),
-    #[error("{remaining} trailing bytes in isolated decoder")]
-    TrailingBytes { remaining: usize },
     #[error("expect {expected}, but got invalid header {actual:?}")]
     TypeError {
         expected: &'static str,
@@ -55,7 +53,7 @@ enum ErrorKind {
     #[error("unexpected field {field:?}")]
     UnexpectedField { field: String },
     #[error("missing field {field:?}")]
-    MissingField { field: &'static str },
+    MissingField { field: &'static NFStr },
     #[error("serialized record contains extra {count} fields")]
     ExtraField { count: usize },
     #[error("unknown {kind} variant {variant:?}")]
@@ -233,38 +231,6 @@ impl<'buf> SliceDecoder<'buf> {
             h => Err(Error::type_error(ty, expected, h)),
         }
     }
-
-    pub(crate) fn isolate<R>(
-        &mut self,
-        ty: TypeInfo,
-        len: usize,
-        f: impl FnOnce(&mut Self) -> Result<R, Error>,
-    ) -> Result<R, Error> {
-        let base = self.offset;
-        let mut inner = SliceDecoder {
-            offset: 0,
-            data: self.read_bytes(ty, len)?,
-        };
-        match f(&mut inner) {
-            Ok(ret) if inner.data.is_empty() => Ok(ret),
-            Ok(_) => Err(Error::from(InnerError {
-                ty,
-                kind: ErrorKind::TrailingBytes {
-                    remaining: inner.data.len(),
-                },
-            })),
-            Err(e) => match e.0.as_ref() {
-                InnerError {
-                    ty,
-                    kind: ErrorKind::Cbor(off),
-                } => Err(Error::from(InnerError {
-                    ty,
-                    kind: ErrorKind::Cbor(base + off),
-                })),
-                _ => Err(e),
-            },
-        }
-    }
 }
 
 pub struct Decoder<'a, 'buf>(pub(crate) &'a mut SliceDecoder<'buf>);
@@ -440,7 +406,7 @@ impl<'a, 'buf> StructDecoder<'a, 'buf> {
         &mut self,
         to_index: impl FnOnce(&str) -> Option<usize>,
         index: usize,
-        field: &'static str,
+        field: &'static NFStr,
     ) -> Result<F, Error> {
         if self.field_index == index {
             let ret = F::decode(Decoder(&mut *self.decoder))?;
@@ -457,7 +423,7 @@ impl<'a, 'buf> StructDecoder<'a, 'buf> {
         &mut self,
         to_index: impl FnOnce(&str) -> Option<usize>,
         index: usize,
-        _field: &'static str,
+        _field: &'static NFStr,
     ) -> Result<Option<F>, Error> {
         if index < self.field_index {
             Ok(None)
@@ -550,6 +516,14 @@ impl<'buf> FromGCbor<'buf> for NFString {
             Ok(v) => Ok(v.to_nf_string()),
             Err(e) => Err(Error::custom(type_name::<Self>(), e)),
         }
+    }
+}
+impl<'buf> FromGCbor<'buf> for String {
+    fn decode(decoder: Decoder<'_, 'buf>) -> Result<Self, Error> {
+        decoder
+            .0
+            .decode_str(type_name::<Self>(), "utf8 string")
+            .map(String::from)
     }
 }
 

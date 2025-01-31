@@ -1,3 +1,4 @@
+#![deny(clippy::unicode_not_nfc)]
 pub mod bytes;
 
 pub mod digest;
@@ -8,7 +9,6 @@ pub mod codec {
 
 pub mod text {
     pub mod normalized;
-    pub mod raw_utf8;
 }
 
 pub mod time;
