@@ -26,7 +26,18 @@ pub mod internal {
 
     pub use crate::text::normalized::nf_str;
 
-    pub type TypeInfo = &'static str;
+    #[derive(Debug, Clone, Copy)]
+    pub struct TypeInfo(&'static str);
+    impl TypeInfo {
+        pub fn new<T: ?Sized>() -> Self {
+            Self(std::any::type_name::<T>())
+        }
+    }
+    impl std::fmt::Display for TypeInfo {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str(self.0)
+        }
+    }
 
     pub mod cmp;
     pub mod decoding;

@@ -1,4 +1,4 @@
-use std::{any::type_name, fmt::Display, mem::MaybeUninit};
+use std::{fmt::Display, mem::MaybeUninit};
 
 pub use ciborium_io::Read;
 use ciborium_ll::{simple, Header};
@@ -236,7 +236,7 @@ impl<'buf> SliceDecoder<'buf> {
 pub struct Decoder<'a, 'buf>(pub(crate) &'a mut SliceDecoder<'buf>);
 impl<'a, 'buf> Decoder<'a, 'buf> {
     fn decode_unsigned<T: TryFrom<u64>>(self) -> Result<T, Error> {
-        let ty = type_name::<T>();
+        let ty = TypeInfo::new::<T>();
         match self.0.pull(ty)? {
             h @ Header::Positive(v) => match T::try_from(v) {
                 Ok(r) => Ok(r),
@@ -246,7 +246,7 @@ impl<'a, 'buf> Decoder<'a, 'buf> {
         }
     }
     fn decode_signed<T: TryFrom<i64>>(self) -> Result<T, Error> {
-        let ty = type_name::<T>();
+        let ty = TypeInfo::new::<T>();
         let (h, v) = match self.0.pull(ty)? {
             h @ Header::Positive(v) if v <= (i64::MAX as u64) => (h, v as i64),
             h @ Header::Negative(v) if v <= ((i64::MIN as u64) ^ !0) => (h, (v ^ !0) as i64),
@@ -463,7 +463,7 @@ impl<T> FromGCborSlice for T where T: for<'buf> FromGCbor<'buf> {}
 
 impl<'buf> FromGCbor<'buf> for bool {
     fn decode(decoder: Decoder<'_, 'buf>) -> Result<Self, Error> {
-        let ty = type_name::<Self>();
+        let ty = TypeInfo::new::<Self>();
         match decoder.0.pull(ty)? {
             Header::Simple(simple::TRUE) => Ok(true),
             Header::Simple(simple::FALSE) => Ok(false),
@@ -502,7 +502,7 @@ signed_impl!(i64);
 
 impl<'buf> FromGCbor<'buf> for () {
     fn decode(decoder: Decoder<'_, 'buf>) -> Result<Self, Error> {
-        let ty = type_name::<Self>();
+        let ty = TypeInfo::new::<Self>();
         match decoder.0.pull(ty)? {
             Header::Simple(simple::NULL) => Ok(()),
             h => Err(Error::type_error(ty, "unit", h)),
@@ -512,9 +512,13 @@ impl<'buf> FromGCbor<'buf> for () {
 
 impl<'buf> FromGCbor<'buf> for NFString {
     fn decode(decoder: Decoder<'_, 'buf>) -> Result<Self, Error> {
-        match NFStr::new(decoder.0.decode_str(type_name::<Self>(), "ascii string")?) {
+        match NFStr::new(
+            decoder
+                .0
+                .decode_str(TypeInfo::new::<Self>(), "ascii string")?,
+        ) {
             Ok(v) => Ok(v.to_nf_string()),
-            Err(e) => Err(Error::custom(type_name::<Self>(), e)),
+            Err(e) => Err(Error::custom(TypeInfo::new::<Self>(), e)),
         }
     }
 }
@@ -522,14 +526,14 @@ impl<'buf> FromGCbor<'buf> for String {
     fn decode(decoder: Decoder<'_, 'buf>) -> Result<Self, Error> {
         decoder
             .0
-            .decode_str(type_name::<Self>(), "utf8 string")
+            .decode_str(TypeInfo::new::<Self>(), "utf8 string")
             .map(String::from)
     }
 }
 
 impl<'buf, const N: usize, T: FromGCbor<'buf>> FromGCbor<'buf> for [T; N] {
     fn decode(decoder: Decoder<'_, 'buf>) -> Result<Self, Error> {
-        let mut dec = decoder.decode_list_len(type_name::<Self>(), N)?;
+        let mut dec = decoder.decode_list_len(TypeInfo::new::<Self>(), N)?;
         let mut ret = unsafe { MaybeUninit::<[MaybeUninit<T>; N]>::uninit().assume_init() };
         for i in ret.iter_mut() {
             i.write(dec.next_element()?);
@@ -539,7 +543,7 @@ impl<'buf, const N: usize, T: FromGCbor<'buf>> FromGCbor<'buf> for [T; N] {
 }
 impl<'buf, T: FromGCbor<'buf>> FromGCbor<'buf> for Vec<T> {
     fn decode(decoder: Decoder<'_, 'buf>) -> Result<Self, Error> {
-        let (len, mut decoder) = decoder.decode_list(type_name::<Self>())?;
+        let (len, mut decoder) = decoder.decode_list(TypeInfo::new::<Self>())?;
         let mut ret = Vec::with_capacity(len);
         for _ in 0..len {
             ret.push(decoder.next_element()?);
@@ -550,7 +554,7 @@ impl<'buf, T: FromGCbor<'buf>> FromGCbor<'buf> for Vec<T> {
 
 impl<'buf> FromGCbor<'buf> for uuid::Uuid {
     fn decode(decoder: Decoder<'_, 'buf>) -> Result<Self, Error> {
-        let ty = type_name::<Self>();
+        let ty = TypeInfo::new::<Self>();
         match decoder.0.pull(ty)? {
             Header::Tag(super::UUID_TAG) => (),
             h => return Err(Error::type_error(ty, "uuid tag", h)),
@@ -558,7 +562,7 @@ impl<'buf> FromGCbor<'buf> for uuid::Uuid {
         match decoder.0.pull(ty)? {
             Header::Bytes(Some(16)) => decoder
                 .0
-                .read_chunk::<16>("16 bytes uuid")
+                .read_chunk::<16>(ty)
                 .map(|v| uuid::Uuid::from_bytes(v.to_owned())),
             h => Err(Error::type_error(ty, "16 bytes uuid", h)),
         }

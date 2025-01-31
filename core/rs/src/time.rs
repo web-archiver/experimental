@@ -1,7 +1,4 @@
-use std::{
-    any::type_name,
-    sync::atomic::{AtomicU32, Ordering},
-};
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use ciborium_ll::Header;
 use rustix::time;
@@ -9,6 +6,7 @@ use rustix::time;
 use crate::codec::gcbor::internal::{
     decoding::{self, FromGCbor},
     encoding::{self, ToGCbor},
+    TypeInfo,
 };
 
 const CLOCK_ID: time::ClockId = time::ClockId::Realtime;
@@ -62,7 +60,7 @@ impl UncertaintyTime {
         Ok(())
     }
     fn decode(decoder: decoding::Decoder) -> Result<Self, decoding::Error> {
-        let ty = type_name::<Self>();
+        let ty = TypeInfo::new::<Self>();
         decode_header!(ty, decoder, "uncertainty map", Header::Map(Some(2)));
         Ok(Self {
             secs: decode_key!(ty, decoder, "seconds", SEC_KEY)?,
@@ -90,7 +88,7 @@ impl Timescale {
     }
 
     fn decode(decoder: decoding::Decoder) -> Result<Self, decoding::Error> {
-        let ty = type_name::<Self>();
+        let ty = TypeInfo::new::<Self>();
         decode_header!(ty, decoder, "timescale id", Header::Positive(0));
         Ok(Self::Utc)
     }
@@ -180,7 +178,7 @@ impl ToGCbor for Timestamp {
 }
 impl<'buf> FromGCbor<'buf> for Timestamp {
     fn decode(decoder: decoding::Decoder<'_, 'buf>) -> Result<Self, decoding::Error> {
-        let ty = type_name::<Self>();
+        let ty = TypeInfo::new::<Self>();
         decode_header!(ty, decoder, "tag", Header::Tag(TIMESTAMP_TAG));
         let known_uncertainty = match decoder.0.pull(ty)? {
             Header::Map(Some(3)) => false,
@@ -226,7 +224,7 @@ impl ToGCbor for TimePeriod {
 }
 impl<'buf> FromGCbor<'buf> for TimePeriod {
     fn decode(decoder: decoding::Decoder<'_, 'buf>) -> Result<Self, decoding::Error> {
-        let ty = type_name::<Self>();
+        let ty = TypeInfo::new::<Self>();
         decode_header!(ty, decoder, "tag", Header::Tag(PERIOD_TAG));
         decode_header!(ty, decoder, "array", Header::Array(Some(2)));
 

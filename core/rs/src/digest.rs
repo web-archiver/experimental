@@ -1,4 +1,4 @@
-use std::{any::type_name, fmt::Debug};
+use std::fmt::Debug;
 
 use ciborium_io::Write;
 use ciborium_ll::Header;
@@ -6,7 +6,7 @@ use ciborium_ll::Header;
 use crate::codec::gcbor::{
     internal::{
         decoding::{self, FromGCbor},
-        encoding,
+        encoding, TypeInfo,
     },
     GCborOrd, ToGCbor,
 };
@@ -49,7 +49,7 @@ impl ToGCbor for Sha256 {
 }
 impl<'buf> FromGCbor<'buf> for Sha256 {
     fn decode(decoder: decoding::Decoder<'_, 'buf>) -> Result<Self, decoding::Error> {
-        let ty = type_name::<Self>();
+        let ty = TypeInfo::new::<Self>();
         match decoder.0.pull(ty)? {
             Header::Tag(SHA256_TAG) => (),
             h => return Err(decoding::Error::type_error(ty, "sha256 tag", h)),

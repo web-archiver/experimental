@@ -1,10 +1,9 @@
-use std::any::type_name;
-
 use ciborium_ll::Header;
 
 use crate::codec::gcbor::internal::{
     decoding,
     encoding::{self, Write},
+    TypeInfo,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -20,7 +19,7 @@ impl encoding::ToGCbor for ByteBuf {
 }
 impl<'buf> decoding::FromGCbor<'buf> for ByteBuf {
     fn decode(decoder: decoding::Decoder<'_, 'buf>) -> Result<Self, decoding::Error> {
-        let ty = type_name::<Self>();
+        let ty = TypeInfo::new::<Self>();
         match decoder.0.pull(ty)? {
             Header::Bytes(Some(len)) => decoder.0.read_bytes(ty, len).map(|b| ByteBuf(b.to_vec())),
             h => Err(decoding::Error::type_error(ty, "bytes", h)),

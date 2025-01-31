@@ -1,5 +1,3 @@
-use std::any::type_name;
-
 pub use ciborium_io::Write;
 use ciborium_ll::Header;
 use uuid::Uuid;
@@ -231,7 +229,7 @@ impl ToGCbor for String {
 
 impl<const N: usize, I: ToGCbor> ToGCbor for [I; N] {
     fn encode<W: Write>(&self, encoder: Encoder<W>) -> Result<(), Error<W::Error>> {
-        let mut seq = encoder.encode_list(type_name::<Self>(), N)?;
+        let mut seq = encoder.encode_list(TypeInfo::new::<Self>(), N)?;
         for i in self {
             seq.encode_element(i)?;
         }
@@ -240,7 +238,7 @@ impl<const N: usize, I: ToGCbor> ToGCbor for [I; N] {
 }
 impl<I: ToGCbor> ToGCbor for [I] {
     fn encode<W: Write>(&self, encoder: Encoder<W>) -> Result<(), Error<W::Error>> {
-        let mut seq = encoder.encode_list(type_name::<Self>(), self.len())?;
+        let mut seq = encoder.encode_list(TypeInfo::new::<Self>(), self.len())?;
         for i in self {
             seq.encode_element(i)?;
         }

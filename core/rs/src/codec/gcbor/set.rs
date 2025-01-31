@@ -1,9 +1,12 @@
-use std::{any::type_name, borrow::Borrow, collections::BTreeSet};
+use std::{borrow::Borrow, collections::BTreeSet};
 
 use ciborium_ll::Header;
 
 use super::{
-    internal::{decoding, decoding::FromGCbor, encoding},
+    internal::{
+        decoding::{self, FromGCbor},
+        encoding, TypeInfo,
+    },
     GCborOrd, Key, ToGCbor,
 };
 
@@ -69,7 +72,7 @@ impl<V: GCborOrd + ToGCbor> ToGCbor for GCborSet<V> {
 }
 impl<'buf, V: GCborOrd + FromGCbor<'buf>> FromGCbor<'buf> for GCborSet<V> {
     fn decode(decoder: decoding::Decoder<'_, 'buf>) -> Result<Self, decoding::Error> {
-        let ty = type_name::<Self>();
+        let ty = TypeInfo::new::<Self>();
         match decoder.0.pull(ty)? {
             Header::Tag(TAG) => (),
             h => return Err(decoding::Error::type_error(ty, "set tag 258", h)),

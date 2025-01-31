@@ -80,7 +80,7 @@ fn sort_fields<'a, T>(
 }
 fn self_type_name() -> Expr {
     parse_quote! {
-        internal::core::any::type_name::<Self>()
+        internal::TypeInfo::new::<Self>()
     }
 }
 fn auto_derive_attr() -> Attribute {

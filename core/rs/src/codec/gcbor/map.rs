@@ -1,11 +1,11 @@
-use std::{any::type_name, borrow::Borrow, collections::BTreeMap};
+use std::{borrow::Borrow, collections::BTreeMap};
 
 use ciborium_ll::Header;
 
 use super::{
     internal::{
         decoding::{self, FromGCbor},
-        encoding,
+        encoding, TypeInfo,
     },
     GCborOrd, Key, KeyBorrow, ToGCbor,
 };
@@ -77,7 +77,7 @@ where
     V: FromGCbor<'buf>,
 {
     fn decode(decoder: decoding::Decoder<'_, 'buf>) -> Result<Self, decoding::Error> {
-        let ty = type_name::<Self>();
+        let ty = TypeInfo::new::<Self>();
         match decoder.0.pull(ty)? {
             Header::Tag(TAG) => (),
             h => return Err(decoding::Error::type_error(ty, "map tag 259", h)),
