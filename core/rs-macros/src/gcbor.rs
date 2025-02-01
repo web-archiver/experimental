@@ -101,11 +101,7 @@ fn auto_derive_attr() -> Attribute {
         }),
     }
 }
-fn wrap<T: quote::ToTokens>(
-    crate_name: &TokenStream,
-    parent_mod: &TokenStream,
-    inputs: &[T],
-) -> TokenStream {
+fn wrap<T: quote::ToTokens>(base_mod: &TokenStream, inputs: &[T]) -> TokenStream {
     struct Many<'a, T>(&'a [T]);
     impl<'a, T: quote::ToTokens> quote::ToTokens for Many<'a, T> {
         fn to_tokens(&self, tokens: &mut TokenStream) {
@@ -118,38 +114,23 @@ fn wrap<T: quote::ToTokens>(
 
     quote! {
         const _ : () =  {
-            extern crate #crate_name;
-
-            use #parent_mod::internal;
+            use #base_mod::codec::gcbor::internal;
 
             #t
         };
     }
 }
 
-pub fn derive_to_gcbor(
-    crate_name: &TokenStream,
-    parent_mod: &TokenStream,
-    input: DeriveInput,
-) -> TokenStream {
-    wrap(crate_name, parent_mod, &[encode::to_gcbor_impl(input)])
+pub fn derive_to_gcbor(base_mod: &TokenStream, input: DeriveInput) -> TokenStream {
+    wrap(base_mod, &[encode::to_gcbor_impl(input)])
 }
 
-pub fn derive_from_gcbor(
-    crate_name: &TokenStream,
-    parent_mod: &TokenStream,
-    input: DeriveInput,
-) -> TokenStream {
-    wrap(crate_name, parent_mod, &[decode::from_gcbor_impl(input)])
+pub fn derive_from_gcbor(base_mod: &TokenStream, input: DeriveInput) -> TokenStream {
+    wrap(base_mod, &[decode::from_gcbor_impl(input)])
 }
-pub fn derive_gcbor(
-    crate_name: &TokenStream,
-    parent_mod: &TokenStream,
-    input: DeriveInput,
-) -> TokenStream {
+pub fn derive_gcbor(base_mod: &TokenStream, input: DeriveInput) -> TokenStream {
     wrap(
-        crate_name,
-        parent_mod,
+        base_mod,
         &[
             encode::to_gcbor_impl(input.clone()),
             decode::from_gcbor_impl(input),
@@ -157,10 +138,6 @@ pub fn derive_gcbor(
     )
 }
 
-pub fn derive_gcbor_ord(
-    crate_name: &TokenStream,
-    parent_mod: &TokenStream,
-    input: DeriveInput,
-) -> TokenStream {
-    wrap(crate_name, parent_mod, &[cmp::gcbor_ord_impl(input)])
+pub fn derive_gcbor_ord(base_mod: &TokenStream, input: DeriveInput) -> TokenStream {
+    wrap(base_mod, &[cmp::gcbor_ord_impl(input)])
 }
