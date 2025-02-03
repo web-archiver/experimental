@@ -13,7 +13,7 @@ use std::{borrow::Borrow, convert::Infallible};
 #[doc(inline)]
 pub use self::internal::{cmp::GCborOrd, decoding::FromGCborSlice, encoding::ToGCbor};
 
-/// Shorthand for deriving both [DecodeSlice] and [ToGCbor]
+/// Shorthand for deriving both [FromGCbor] and [ToGCbor]
 pub use webar_core_macros::GCborCodec;
 #[doc(inline)]
 pub use webar_core_macros::{FromGCbor, GCborOrd, ToGCbor};
