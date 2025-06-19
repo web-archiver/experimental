@@ -65,6 +65,30 @@ impl<'buf> FromGCbor<'buf> for Sha256 {
     }
 }
 
+#[derive(Debug)]
+pub struct Hasher(sha2::Sha256);
+impl Hasher {
+    pub fn new() -> Self {
+        use sha2::Digest;
+        Self(sha2::Sha256::new())
+    }
+    pub fn update(&mut self, buf: &[u8]) {
+        sha2::Digest::update(&mut self.0, buf);
+    }
+    pub fn finalize(self) -> Digest {
+        Digest::Sha256(Sha256(sha2::Digest::finalize(self.0).into()))
+    }
+}
+impl std::io::Write for Hasher {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.update(buf);
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Digest {
     Sha256(Sha256),
