@@ -113,6 +113,24 @@ pub fn to_vec<T: ToGCbor + ?Sized>(value: &T) -> Vec<u8> {
     }
     writer.0
 }
+pub fn to_writer<T: ToGCbor + ?Sized>(
+    w: impl std::io::Write,
+    value: &T,
+) -> Result<(), internal::encoding::Error<std::io::Error>> {
+    struct IoWriter<W>(W);
+    impl<W: std::io::Write> ciborium_io::Write for IoWriter<W> {
+        type Error = std::io::Error;
+        fn write_all(&mut self, data: &[u8]) -> Result<(), Self::Error> {
+            self.0.write_all(data)
+        }
+        fn flush(&mut self) -> Result<(), Self::Error> {
+            self.0.flush()
+        }
+    }
+    value.encode(internal::encoding::Encoder(
+        &mut ciborium_ll::Encoder::from(IoWriter(w)),
+    ))
+}
 
 pub type DecodeSliceError = internal::decoding::Error;
 
