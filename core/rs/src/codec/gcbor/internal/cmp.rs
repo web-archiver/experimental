@@ -26,6 +26,11 @@ impl GCborOrd for String {
         webar_core_internal::cmp_cbor_str(self.as_str(), other.as_str())
     }
 }
+impl<T: GCborOrd + ?Sized> GCborOrd for &T {
+    fn cmp_gcbor(&self, other: &Self) -> Ordering {
+        T::cmp_gcbor(self, other)
+    }
+}
 
 macro_rules! forward_ord {
     ($t:ty) => {
