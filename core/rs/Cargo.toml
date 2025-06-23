@@ -15,6 +15,7 @@ thiserror.workspace = true
 webar-core-internal = { path = "../rs-internal" }
 webar-core-macros = { path = "../rs-macros" }
 sha2 = "0.10.8"
+valuable.workspace = true
 
 [dev-dependencies]
 hex-literal.workspace = true

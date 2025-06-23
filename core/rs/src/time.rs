@@ -2,6 +2,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use ciborium_ll::Header;
 use rustix::time;
+use valuable::Valuable;
 
 use crate::codec::gcbor::internal::{
     decoding::{self, FromGCbor},
@@ -38,7 +39,7 @@ const UNCERTAIN_KEY: Header = Header::Negative(negative_val(-7));
 const NANO_KEY: Header = Header::Negative(negative_val(-9));
 const TIMESCALE_KEY: Header = Header::Positive(13);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Valuable)]
 struct UncertaintyTime {
     secs: u64,
     nanos: u32,
@@ -69,13 +70,13 @@ impl UncertaintyTime {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Valuable)]
 enum TimeUncertainty {
     Unknown,
     TuTime(UncertaintyTime),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Valuable)]
 enum Timescale {
     Utc = 0,
 }
@@ -95,7 +96,7 @@ impl Timescale {
 }
 
 /// Timestamp based on [rfc9581](https://www.rfc-editor.org/rfc/rfc9581.html)
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Valuable)]
 pub struct Timestamp {
     pub secs: u64,
     pub nanos: u32,
@@ -206,7 +207,7 @@ impl<'buf> FromGCbor<'buf> for Timestamp {
 }
 
 /// Period based on [rfc9581](https://www.rfc-editor.org/rfc/rfc9581.html)
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Valuable)]
 pub struct TimePeriod(pub Timestamp, pub Timestamp);
 
 const PERIOD_TAG: u64 = 1003;

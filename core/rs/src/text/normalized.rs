@@ -4,6 +4,8 @@ Currently only ascii character is allowed.
 */
 use std::{fmt::Display, mem::transmute};
 
+use valuable::Valuable;
+
 pub use crate::nf_str;
 
 #[derive(Debug, thiserror::Error)]
@@ -45,6 +47,20 @@ impl NFStr {
         }
     }
 }
+impl valuable::Valuable for &NFStr {
+    fn as_value(&self) -> valuable::Value<'_> {
+        valuable::Value::String(self.as_str())
+    }
+    fn visit(&self, visit: &mut dyn valuable::Visit) {
+        visit.visit_value(self.as_value())
+    }
+    fn visit_slice(slice: &[Self], visit: &mut dyn valuable::Visit)
+    where
+        Self: Sized,
+    {
+        visit.visit_primitive_slice(valuable::Slice::Str(unsafe { std::mem::transmute(slice) }))
+    }
+}
 
 #[macro_export]
 macro_rules! nf_str {
@@ -56,7 +72,8 @@ macro_rules! nf_str {
 #[derive(Debug, thiserror::Error)]
 #[error("String contains non-ascii character")]
 pub struct NFStringError();
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Valuable)]
+#[valuable(transparent)]
 pub struct NFString(String);
 impl Display for NFString {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

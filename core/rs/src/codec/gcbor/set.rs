@@ -29,7 +29,7 @@ impl<V> GCborSet<V> {
     {
         self.0.remove(super::KeyBorrow::new(v))
     }
-    pub fn contains<Q>(&mut self, v: &Q) -> bool
+    pub fn contains<Q>(&self, v: &Q) -> bool
     where
         V: Borrow<Q> + GCborOrd,
         Q: GCborOrd + ?Sized,
@@ -53,6 +53,14 @@ impl<const N: usize, T: GCborOrd> From<[T; N]> for GCborSet<T> {
 impl<V> Default for GCborSet<V> {
     fn default() -> Self {
         Self::new()
+    }
+}
+impl<V: GCborOrd + valuable::Valuable> valuable::Valuable for GCborSet<V> {
+    fn as_value(&self) -> valuable::Value<'_> {
+        self.0.as_value()
+    }
+    fn visit(&self, visit: &mut dyn valuable::Visit) {
+        self.0.visit(visit)
     }
 }
 

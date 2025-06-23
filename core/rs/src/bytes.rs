@@ -1,4 +1,5 @@
 use ciborium_ll::Header;
+use valuable::Valuable;
 
 use crate::codec::gcbor::internal::{
     decoding,
@@ -6,7 +7,7 @@ use crate::codec::gcbor::internal::{
     TypeInfo,
 };
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Valuable)]
 pub struct ByteBuf(pub Vec<u8>);
 impl encoding::ToGCbor for ByteBuf {
     fn encode<W: Write>(
@@ -45,5 +46,19 @@ impl encoding::ToGCbor for Bytes {
     ) -> Result<(), encoding::Error<W::Error>> {
         encoder.0.push(Header::Bytes(Some(self.0.len())))?;
         encoder.0.write_all(&self.0).map_err(encoding::Error::from)
+    }
+}
+impl valuable::Valuable for &Bytes {
+    fn as_value(&self) -> valuable::Value<'_> {
+        valuable::Value::Structable(self)
+    }
+
+    fn visit(&self, visit: &mut dyn valuable::Visit) {
+        visit.visit_unnamed_fields(&[(&self.0).as_value()])
+    }
+}
+impl valuable::Structable for &Bytes {
+    fn definition(&self) -> valuable::StructDef<'_> {
+        valuable::StructDef::new_static("Bytes", valuable::Fields::Unnamed(1))
     }
 }

@@ -2,6 +2,7 @@ use std::fmt::Debug;
 
 use ciborium_io::Write;
 use ciborium_ll::Header;
+use valuable::Valuable;
 
 use crate::codec::gcbor::{
     internal::{
@@ -22,7 +23,7 @@ impl<'a> Debug for DebugHash<'a> {
 }
 
 const SHA256_SIZE: usize = 32;
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Valuable)]
 pub struct Sha256(pub [u8; SHA256_SIZE]);
 impl Debug for Sha256 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -89,7 +90,7 @@ impl std::io::Write for Hasher {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Valuable)]
 pub enum Digest {
     Sha256(Sha256),
 }

@@ -59,7 +59,7 @@ enum ErrorKind {
     #[error("unknown {kind} variant {variant:?}")]
     UnknownVariant { kind: VariantKind, variant: String },
     #[error("{0}")]
-    Custom(#[source] Box<dyn std::error::Error + 'static>),
+    Custom(#[source] Box<dyn std::error::Error + Send + Sync + 'static>),
 }
 
 #[derive(Debug)]
@@ -97,7 +97,7 @@ impl Error {
     #[cold]
     pub(crate) fn custom(
         ty: TypeInfo,
-        err: impl Into<Box<dyn std::error::Error + 'static>>,
+        err: impl Into<Box<dyn std::error::Error + Send + Sync + 'static>>,
     ) -> Self where {
         Self::from(InnerError {
             ty,

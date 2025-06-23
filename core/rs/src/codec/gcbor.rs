@@ -57,6 +57,20 @@ impl<V: GCborOrd> Ord for Key<V> {
         self.0.cmp_gcbor(&other.0)
     }
 }
+impl<V: valuable::Valuable> valuable::Valuable for Key<V> {
+    fn as_value(&self) -> valuable::Value<'_> {
+        self.0.as_value()
+    }
+    fn visit(&self, visit: &mut dyn valuable::Visit) {
+        self.0.visit(visit);
+    }
+    fn visit_slice(slice: &[Self], visit: &mut dyn valuable::Visit)
+    where
+        Self: Sized,
+    {
+        V::visit_slice(unsafe { transmute(slice) }, visit);
+    }
+}
 
 #[derive(PartialEq, Eq)]
 #[repr(transparent)]

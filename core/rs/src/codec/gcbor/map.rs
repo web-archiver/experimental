@@ -55,6 +55,16 @@ impl<K, V> Default for GCborMap<K, V> {
         Self::new()
     }
 }
+impl<K: GCborOrd + valuable::Valuable, V: valuable::Valuable> valuable::Valuable
+    for GCborMap<K, V>
+{
+    fn as_value(&self) -> valuable::Value<'_> {
+        self.0.as_value()
+    }
+    fn visit(&self, visit: &mut dyn valuable::Visit) {
+        self.0.visit(visit);
+    }
+}
 
 const TAG: u64 = 259;
 impl<K: ToGCbor + GCborOrd, V: ToGCbor> ToGCbor for GCborMap<K, V> {
