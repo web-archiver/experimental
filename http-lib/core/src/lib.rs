@@ -17,4 +17,14 @@ impl FilePath {
 }
 pub mod fetch;
 
+pub mod blob {
+    #[derive(Debug, webar_core::codec::gcbor::GCborCodec)]
+    pub struct Info {
+        pub size: u64,
+        pub compressible: bool,
+    }
+
+    pub mod index;
+    pub mod store;
+}
 pub mod utils;

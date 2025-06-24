@@ -7,4 +7,6 @@ license.workspace = true
 [dependencies]
 anyhow.workspace = true
 rustix.workspace = true
+const-hex.workspace = true
+rusqlite = "0.33.0"
 webar-core.workspace = true
