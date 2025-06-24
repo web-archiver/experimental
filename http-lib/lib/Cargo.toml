@@ -1,0 +1,12 @@
+[package]
+name = "webar-http-lib"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+rustls = "0.23.21"
+webpki-roots = "0.26.7"
+webar-core.workspace = true
+webar-http-lib-core = { path = "../core" }

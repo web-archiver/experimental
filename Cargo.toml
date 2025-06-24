@@ -1,6 +1,12 @@
 [workspace]
 resolver = "2"
-members = ["core/rs-internal", "core/rs-macros", "core/rs"]
+members = [
+  "core/rs-internal",
+  "core/rs-macros",
+  "core/rs",
+  "http-lib/lib",
+  "http-lib/core",
+]
 
 
 [workspace.package]
@@ -13,4 +19,6 @@ phf = { version = "0.11.2", features = ["macros"] }
 hex-literal = "0.4.1"
 const-hex = "1.11.3"
 thiserror = "1.0.61"
+anyhow = "1.0.95"
 valuable = { version = "0.1.1", features = ["derive"] }
+webar-core = { path = "./core/rs" }
