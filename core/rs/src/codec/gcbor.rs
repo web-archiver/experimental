@@ -45,6 +45,11 @@ pub mod internal {
     pub mod encoding;
 }
 
+#[doc(hidden)]
+pub mod support {
+    pub mod tracing;
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(transparent)]
 struct Key<V>(V);

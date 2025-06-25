@@ -8,8 +8,22 @@ license.workspace = true
 anyhow.workspace = true
 const-hex.workspace = true
 tar.workspace = true
-rustix = { workspace = true, features = ["runtime", "process"] }
+rustix = { workspace = true, features = ["runtime", "process", "thread"] }
 rustls = "0.23.21"
 webpki-roots = "0.26.7"
+# logging
+valuable.workspace = true
+tracing.workspace = true
+serde = { version = "1.0.219", features = ["derive"] }
+ciborium = "0.2.2"
+tracing-serde = { version = "0.2.0", features = ["valuable"] }
+tracing-subscriber = { version = "0.3.19", features = [
+  "fmt",
+  "env-filter",
+  "valuable",
+  "json",
+] }
+indicatif.workspace = true
+tracing-indicatif.workspace = true
 webar-core.workspace = true
 webar-http-lib-core = { path = "../core" }
