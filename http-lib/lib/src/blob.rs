@@ -48,7 +48,7 @@ impl BlobWriter {
             file,
             size: self.size,
             digest: self.hasher.finalize(),
-            compressible: false,
+            compressible: None,
         })
     }
 }
@@ -73,7 +73,7 @@ pub struct BlobFile {
     file: std::fs::File,
     size: usize,
     digest: Digest,
-    compressible: bool,
+    compressible: Option<bool>,
 }
 impl BlobFile {
     pub fn size(&self) -> usize {
@@ -82,7 +82,13 @@ impl BlobFile {
     pub fn digest(&self) -> &Digest {
         &self.digest
     }
-    pub fn set_compressible(&mut self, compressible: bool) {
+    pub fn compressible(&self) -> Option<bool> {
+        self.compressible
+    }
+    pub fn compressible_mut(&mut self) -> &mut Option<bool> {
+        &mut self.compressible
+    }
+    pub fn set_compressible(&mut self, compressible: Option<bool>) {
         self.compressible = compressible;
     }
 }

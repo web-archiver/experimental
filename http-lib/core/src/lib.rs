@@ -21,7 +21,9 @@ pub mod blob {
     #[derive(Debug, webar_core::codec::gcbor::GCborCodec)]
     pub struct Info {
         pub size: u64,
-        pub compressible: bool,
+        /// [None] means compressibility is unknown
+        #[gcbor(omissible)]
+        pub compressible: Option<bool>,
     }
 
     pub mod index;
