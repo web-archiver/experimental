@@ -126,6 +126,36 @@ impl BlobStore {
         })
     }
 
+    fn update_info(&self, digest: &Digest, info: Info) {
+        use gcbor::map;
+        match self
+            .incremental_info
+            .lock()
+            .unwrap()
+            .additional
+            .entry(*digest)
+        {
+            map::Entry::Occupied(o) => {
+                let r = o.into_mut();
+                match (r.is_compressible, info.is_compressible) {
+                    (Some(cl), Some(cr)) => {
+                        if cl != cr {
+                            r.is_compressible = None;
+                        }
+                    }
+                    (Some(_), None) => (),
+                    (None, Some(_)) => {
+                        r.is_compressible = info.is_compressible;
+                    }
+                    (None, None) => (),
+                }
+            }
+            map::Entry::Vacant(v) => {
+                v.insert(info);
+            }
+        }
+    }
+
     pub fn add_data(&self, digest: &Digest, info: Info, data: &[u8]) -> Result<()> {
         if self
             .shared_index
@@ -142,11 +172,7 @@ impl BlobStore {
                 .add_blob(digest, data)
                 .context("failed to add data to store")?;
 
-            self.incremental_info
-                .lock()
-                .unwrap()
-                .additional
-                .insert(*digest, info);
+            self.update_info(digest, info);
         }
 
         Ok(())
@@ -168,11 +194,11 @@ impl BlobStore {
                 .link_fd(&file.digest, file.file.as_fd())
                 .context("failed to write to store")?;
 
-            self.incremental_info.lock().unwrap().additional.insert(
-                file.digest,
+            self.update_info(
+                &file.digest,
                 Info {
                     size: file.size as u64,
-                    compressible: file.compressible,
+                    is_compressible: file.compressible,
                 },
             );
         }

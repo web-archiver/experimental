@@ -29,7 +29,7 @@ pub mod blob {
         pub size: u64,
         /// [None] means compressibility is unknown
         #[gcbor(omissible)]
-        pub compressible: Option<bool>,
+        pub is_compressible: Option<bool>,
     }
 
     pub mod index;
