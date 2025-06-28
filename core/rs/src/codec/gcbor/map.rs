@@ -1,4 +1,7 @@
-use std::{borrow::Borrow, collections::BTreeMap};
+use std::{
+    borrow::Borrow,
+    collections::{btree_map, BTreeMap},
+};
 
 use ciborium_ll::Header;
 
@@ -9,6 +12,65 @@ use super::{
     },
     GCborOrd, Key, KeyBorrow, ToGCbor,
 };
+
+pub struct OccupiedEntry<'a, K, V>(btree_map::OccupiedEntry<'a, Key<K>, V>);
+impl<'a, K: GCborOrd, V> OccupiedEntry<'a, K, V> {
+    pub fn key(&self) -> &K {
+        &self.0.key().0
+    }
+    pub fn remove_entry(self) -> (K, V) {
+        let (k, v) = self.0.remove_entry();
+        (k.0, v)
+    }
+    pub fn get(&self) -> &V {
+        self.0.get()
+    }
+    pub fn get_mut(&mut self) -> &mut V {
+        self.0.get_mut()
+    }
+    pub fn into_mut(self) -> &'a mut V {
+        self.0.into_mut()
+    }
+    pub fn insert(&mut self, v: V) -> V {
+        self.0.insert(v)
+    }
+    pub fn remote(self) -> V {
+        self.0.remove()
+    }
+}
+pub struct VacantEntry<'a, K, V>(btree_map::VacantEntry<'a, Key<K>, V>);
+impl<'a, K: GCborOrd, V> VacantEntry<'a, K, V> {
+    pub fn key(&self) -> &K {
+        &self.0.key().0
+    }
+    pub fn into_key(self) -> K {
+        self.0.into_key().0
+    }
+    pub fn insert(self, v: V) -> &'a mut V {
+        self.0.insert(v)
+    }
+}
+
+pub enum Entry<'a, K, V> {
+    Occupied(OccupiedEntry<'a, K, V>),
+    Vacant(VacantEntry<'a, K, V>),
+}
+impl<'a, K: GCborOrd, V> Entry<'a, K, V> {
+    pub fn or_insert(self, val: V) -> &'a mut V {
+        match self {
+            Self::Occupied(o) => o.into_mut(),
+            Self::Vacant(v) => v.insert(val),
+        }
+    }
+}
+impl<'a, K: GCborOrd, V: Default> Entry<'a, K, V> {
+    pub fn or_default(self) -> &'a mut V {
+        match self {
+            Self::Occupied(o) => o.into_mut(),
+            Self::Vacant(v) => v.insert(V::default()),
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GCborMap<K, V>(BTreeMap<Key<K>, V>);
@@ -41,6 +103,15 @@ impl<K, V> GCborMap<K, V> {
         Q: GCborOrd + ?Sized,
     {
         self.0.remove(KeyBorrow::new(k))
+    }
+    pub fn entry(&mut self, k: K) -> Entry<K, V>
+    where
+        K: GCborOrd,
+    {
+        match self.0.entry(Key(k)) {
+            btree_map::Entry::Occupied(o) => Entry::Occupied(OccupiedEntry(o)),
+            btree_map::Entry::Vacant(v) => Entry::Vacant(VacantEntry(v)),
+        }
     }
 }
 impl<const N: usize, K: GCborOrd, V> From<[(K, V); N]> for GCborMap<K, V> {
