@@ -15,3 +15,5 @@ pub const TRACING_LOG_JSON: FilePath = FilePath::new_throw(c"tracing/json.log.js
 
 pub const BLOB_INCREMENTAL_STORE: FilePath = FilePath::new_throw(c"blob/incremental");
 pub const BLOB_INCREMENTAL_INFO_FILE: FilePath = FilePath::new_throw(c"blob/incremental.bin");
+
+pub const HTTP_DATA: FilePath = FilePath::new_throw(c"http.tar");
