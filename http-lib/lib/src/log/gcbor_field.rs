@@ -38,13 +38,13 @@ fn visit_vals(ty: &str, val: Value, data: &[u8], visit: &mut dyn valuable::Visit
     ));
 }
 
-pub struct SliceField<'a, T: ?Sized> {
+pub struct SliceField<'a, 'buf, T: ?Sized> {
     type_name: &'static str,
     value: Value<'a>,
-    data: ValueSlice<'a, T>,
+    data: ValueSlice<'buf, T>,
 }
-impl<'a, T: ?Sized> SliceField<'a, T> {
-    pub fn new(buf: &'a mut ValueBuf, v: &'a T) -> Self
+impl<'a, 'buf, T: ?Sized> SliceField<'a, 'buf, T> {
+    pub fn new(buf: &'buf mut ValueBuf, v: &'a T) -> Self
     where
         T: ToGCbor + Valuable,
     {
@@ -54,16 +54,16 @@ impl<'a, T: ?Sized> SliceField<'a, T> {
             data: buf.encode(v),
         }
     }
-    pub fn into_encoded(self) -> ValueSlice<'a, T> {
+    pub fn into_encoded(self) -> ValueSlice<'buf, T> {
         self.data
     }
 }
-impl<'a, T: ?Sized> valuable::Structable for SliceField<'a, T> {
+impl<'a, 'buf, T: ?Sized> valuable::Structable for SliceField<'a, 'buf, T> {
     fn definition(&self) -> valuable::StructDef<'_> {
         STRUCT_DEF
     }
 }
-impl<'a, T: ?Sized> Valuable for SliceField<'a, T> {
+impl<'a, 'buf, T: ?Sized> Valuable for SliceField<'a, 'buf, T> {
     fn as_value(&self) -> Value<'_> {
         valuable::Value::Structable(self)
     }
