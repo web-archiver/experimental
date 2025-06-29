@@ -269,6 +269,16 @@ impl<'a> ToGCbor for PrimValue<'a> {
     }
 }
 
+pub struct EncodedSlice<'a>(pub &'a [u8]);
+impl<'a> ToGCbor for EncodedSlice<'a> {
+    fn encode<W: Write>(
+        &self,
+        encoder: encoding::Encoder<W>,
+    ) -> Result<(), encoding::Error<W::Error>> {
+        encoder.0.write_all(self.0).map_err(encoding::Error)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     mod u128_bytes {

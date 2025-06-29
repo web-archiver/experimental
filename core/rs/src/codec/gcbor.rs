@@ -157,12 +157,18 @@ pub fn to_writer<T: ToGCbor + ?Sized>(
 pub struct SomeType();
 #[derive(Clone, PartialEq, Eq)]
 pub struct EncodedVal<T: ?Sized>(Vec<u8>, PhantomData<T>);
-impl<T: ?Sized + ToGCbor> EncodedVal<T> {
-    pub fn new(val: &T) -> EncodedVal<T> {
+impl<T: ?Sized> EncodedVal<T> {
+    pub fn new(val: &T) -> EncodedVal<T>
+    where
+        T: ToGCbor,
+    {
         Self(to_vec(val), PhantomData)
     }
     pub fn untype(self) -> EncodedVal<SomeType> {
         EncodedVal(self.0, PhantomData)
+    }
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.0
     }
 }
 impl<T: ?Sized> ToGCbor for EncodedVal<T> {
@@ -174,6 +180,11 @@ impl<T: ?Sized> ToGCbor for EncodedVal<T> {
             .0
             .write_all(&self.0)
             .map_err(internal::encoding::Error)
+    }
+}
+impl<T: ?Sized> AsRef<[u8]> for EncodedVal<T> {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
     }
 }
 
@@ -203,6 +214,9 @@ impl ValueBuf {
 impl<'a, T: ?Sized> ValueSlice<'a, T> {
     pub fn untype(self) -> ValueSlice<'a, SomeType> {
         ValueSlice(self.0, PhantomData)
+    }
+    pub fn as_bytes(&self) -> &[u8] {
+        self.0
     }
 }
 impl<'a, T: ?Sized> AsRef<[u8]> for ValueSlice<'a, T> {

@@ -28,8 +28,8 @@ struct EventInfo<'a> {
     thread: ThreadInfo<'a>,
 }
 
+pub mod gcbor_field;
 mod gcbor_layer;
-pub use gcbor_layer::GCborField;
 mod serde_layer;
 
 #[derive(Clone, Copy, webar_core::codec::gcbor::ToGCbor, serde::Serialize)]

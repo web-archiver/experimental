@@ -14,6 +14,8 @@ use webar_core::{
 
 use webar_http_lib_core::{fetch::TRACING_LOG_GCBOR, utils::create_file};
 
+use super::gcbor_field;
+
 #[derive(ToGCbor)]
 #[gcbor(transparent)]
 struct SpanId(u64);
@@ -40,7 +42,6 @@ impl From<tracing::Level> for Level {
             tracing::Level::INFO => Self::Info,
             tracing::Level::DEBUG => Self::Debug,
             tracing::Level::TRACE => Self::Trace,
-            _ => unreachable!(),
         }
     }
 }
@@ -58,56 +59,6 @@ impl From<&tracing::field::FieldSet> for FieldSet {
     }
 }
 
-pub struct GCborField<'a> {
-    type_name: &'static str,
-    valuable: valuable::Value<'a>,
-    data: EncodedVal<SomeType>,
-}
-impl<'a> GCborField<'a> {
-    pub fn new<T: ?Sized + valuable::Valuable + ToGCbor>(v: &'a T) -> Self {
-        Self {
-            type_name: std::any::type_name::<T>(),
-            valuable: v.as_value(),
-            data: EncodedVal::new(v).untype(),
-        }
-    }
-
-    const NAME: &'static str = "webar::tracing::gcbor_field";
-
-    const F_TYPE_NAME: &'static str = "type_name";
-    const F_VALUABLE: &'static str = "valuable";
-    const F_DATA: &'static str = "data_ptr";
-
-    const FIELDS: &'static [valuable::NamedField<'static>] = {
-        use valuable::NamedField;
-        &[
-            NamedField::new(Self::F_TYPE_NAME),
-            NamedField::new(Self::F_VALUABLE),
-            NamedField::new(Self::F_DATA),
-        ]
-    };
-}
-impl<'a> valuable::Valuable for GCborField<'a> {
-    fn as_value(&self) -> valuable::Value<'_> {
-        valuable::Value::Structable(self)
-    }
-    fn visit(&self, visitor: &mut dyn valuable::Visit) {
-        visitor.visit_named_fields(&valuable::NamedValues::new(
-            Self::FIELDS,
-            &[
-                self.type_name.as_value(),
-                self.valuable,
-                valuable::Value::Usize((&self.data) as *const EncodedVal<SomeType> as usize),
-            ],
-        ));
-    }
-}
-impl<'a> valuable::Structable for GCborField<'a> {
-    fn definition(&self) -> ::valuable::StructDef<'_> {
-        valuable::StructDef::new_static(Self::NAME, valuable::Fields::Named(Self::FIELDS))
-    }
-}
-
 #[derive(ToGCbor)]
 #[gcbor(rename_variants = "snake_case")]
 enum Field<'a> {
@@ -115,11 +66,7 @@ enum Field<'a> {
     Debug(DebugString),
     Error(Error),
     Valuable(Wrapper<valuable::Value<'a>>),
-    Cbor {
-        type_name: &'a str,
-        valuable: Wrapper<valuable::Value<'a>>,
-        encoded: &'a EncodedVal<SomeType>,
-    },
+    Cbor(gcbor_field::Field<'a>),
 }
 
 #[derive(ToGCbor)]
@@ -144,41 +91,17 @@ impl Visit for ValueSet {
 
     fn record_value(&mut self, field: &tracing::field::Field, value: valuable::Value<'_>) {
         match value {
-            valuable::Value::Structable(s) if s.definition().name() == GCborField::NAME => {
+            valuable::Value::Structable(s) if s.definition().name() == gcbor_field::TY_NAME => {
                 struct Visitor(Option<EncodedVal<SomeType>>);
                 impl valuable::Visit for Visitor {
                     fn visit_value(&mut self, _: valuable::Value<'_>) {
                         unreachable!()
                     }
                     fn visit_named_fields(&mut self, named_values: &valuable::NamedValues<'_>) {
-                        let mut type_name = None;
-                        let mut value = None;
-                        let mut encoded = None;
-                        for (k, v) in named_values.iter() {
-                            match k.name() {
-                                GCborField::F_TYPE_NAME => match v {
-                                    valuable::Value::String(s) => type_name = Some(*s),
-                                    _ => panic!("invalid type for field type_name: {v:?}"),
-                                },
-                                GCborField::F_VALUABLE => value = Some(*v),
-                                GCborField::F_DATA => match v {
-                                    valuable::Value::Usize(s) => {
-                                        encoded = Some(unsafe {
-                                            (*s as *const EncodedVal<SomeType>).as_ref().unwrap()
-                                        })
-                                    }
-                                    _ => panic!("invalid type for field data: {v:?}"),
-                                },
-                                name => panic!("unknown field: {name} = {v:?}"),
-                            }
-                        }
-                        assert!(self.0.is_none());
                         self.0 = Some(
-                            EncodedVal::new(&Field::Cbor {
-                                type_name: type_name.expect("missing field type_name"),
-                                valuable: Wrapper(value.expect("missing field valuable")),
-                                encoded: encoded.expect("missing field encoded"),
-                            })
+                            EncodedVal::new(&Field::Cbor(gcbor_field::Field::from_named_values(
+                                named_values,
+                            )))
                             .untype(),
                         );
                     }
