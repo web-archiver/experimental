@@ -1,6 +1,5 @@
 use std::{
     io::{self, Result},
-    marker::PhantomData,
     os::fd::OwnedFd,
 };
 
@@ -24,19 +23,17 @@ fn append_data<W: io::Write>(id: u32, builder: &mut tar::Builder<W>, data: &[u8]
     )
 }
 
-pub struct TarSink<T: ?Sized> {
+pub struct TarSink {
     count: u32,
     buf: ValueBuf,
     output: tar::Builder<io::BufWriter<std::fs::File>>,
-    _phantom: PhantomData<fn(&T) -> ()>,
 }
-impl<T> TarSink<T> {
+impl TarSink {
     pub fn from_fd(file: OwnedFd) -> Self {
         Self {
             count: 0,
             buf: ValueBuf::new(),
             output: tar::Builder::new(io::BufWriter::new(std::fs::File::from(file))),
-            _phantom: PhantomData,
         }
     }
     pub fn add_data(&mut self, data: &[u8]) -> Result<u32> {
@@ -45,10 +42,7 @@ impl<T> TarSink<T> {
         self.count += 1;
         Ok(id)
     }
-    pub fn add_object(&mut self, data: &T) -> Result<u32>
-    where
-        T: gcbor::ToGCbor,
-    {
+    pub fn add_object<T: ?Sized + gcbor::ToGCbor>(&mut self, data: &T) -> Result<u32> {
         let id = self.count;
         append_data(id, &mut self.output, self.buf.encode(data).as_ref())?;
         self.count += 1;
