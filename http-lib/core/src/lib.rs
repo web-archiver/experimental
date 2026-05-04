@@ -35,4 +35,9 @@ pub mod blob {
     pub mod index;
     pub mod store;
 }
+
+pub mod object {
+    pub mod index;
+}
+
 pub mod utils;

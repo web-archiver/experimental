@@ -81,9 +81,7 @@ impl http_body::Body for TimedBody {
                 std::task::Poll::Ready(Some(Ok(http_body::Frame::data(d))))
             }
             None => {
-                if self.sent_body.get().is_none() {
-                    self.sent_body.set(Some(Timestamp::now())).unwrap();
-                }
+                let _ = self.sent_body.set(Some(Timestamp::now()));
                 std::task::Poll::Ready(None)
             }
         }
@@ -118,8 +116,8 @@ impl http_body::Body for TimedEmptyBody {
         _: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Option<std::result::Result<http_body::Frame<Self::Data>, Self::Error>>>
     {
-        self.sent_header.set(Timestamp::now()).unwrap();
-        self.sent_body.set(None).unwrap();
+        let _ = self.sent_header.set(Timestamp::now());
+        let _ = self.sent_body.set(None);
         std::task::Poll::Ready(None)
     }
 }

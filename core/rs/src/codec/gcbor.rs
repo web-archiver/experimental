@@ -48,6 +48,7 @@ pub mod internal {
 #[doc(hidden)]
 pub mod support {
     pub mod http;
+    pub mod store;
     pub mod tracing;
 }
 
