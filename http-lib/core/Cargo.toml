@@ -8,5 +8,5 @@ license.workspace = true
 anyhow.workspace = true
 rustix.workspace = true
 const-hex.workspace = true
-rusqlite = "0.33.0"
+rusqlite = "0.39.0"
 webar-core.workspace = true

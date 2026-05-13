@@ -10,7 +10,7 @@ use rustix::{
     fd::{AsFd, BorrowedFd},
     fs::{self, AtFlags, Mode, OFlags},
     process::{kill_process, umask, waitpid, Pid, WaitOptions},
-    runtime::{fork, Fork},
+    runtime::{kernel_fork, Fork},
 };
 
 use webar_http_lib_core::fetch::{WIRESHARK_DATA_FILE, WIRESHARK_LOG_FILE};
@@ -31,7 +31,7 @@ const DUMPCAP_ARGS: &[&str] = &[
 
 fn wait(pid: Pid) -> anyhow::Result<()> {
     loop {
-        if let Some(s) = waitpid(Some(pid), WaitOptions::empty())? {
+        if let Some((_, s)) = waitpid(Some(pid), WaitOptions::empty())? {
             if let Some(s) = s.terminating_signal() {
                 anyhow::bail!("terminated with signal {s}");
             }
@@ -67,7 +67,7 @@ unsafe fn run<E: std::fmt::Debug>(
     // wait for dumpcap starting up
     sleep(BEFORE_START);
     // check dumpcap is started
-    if let Some(s) =
+    if let Some((_, s)) =
         waitpid(Some(dumpcap), WaitOptions::NOHANG).context("failed to check dumpcap status")?
     {
         if let Some(s) = s.terminating_signal() {
@@ -85,7 +85,7 @@ unsafe fn run<E: std::fmt::Debug>(
     )
     .context("failed to open root dir")?;
 
-    let child = match fork().context("failed to start child")? {
+    let child = match kernel_fork().context("failed to start child")? {
         Fork::Child(_) => match f(root.as_fd()) {
             Ok(()) => exit(0),
             Err(e) => {
@@ -93,20 +93,20 @@ unsafe fn run<E: std::fmt::Debug>(
                 exit(-1)
             }
         },
-        Fork::Parent(p) => p,
+        Fork::ParentOf(p) => p,
     };
     match wait(child).context("failed to wait child") {
         Ok(()) => sleep(AFTER_STOP),
         // stop dumpcap on error
         Err(e) => {
             sleep(AFTER_STOP);
-            kill_process(dumpcap, rustix::process::Signal::Term)
+            kill_process(dumpcap, rustix::process::Signal::TERM)
                 .context("failed to send signal to dumpcap")?;
             return Err(e);
         }
     };
 
-    kill_process(dumpcap, rustix::process::Signal::Int)
+    kill_process(dumpcap, rustix::process::Signal::INT)
         .context("failed to send signal to dumpcap")?;
     wait(dumpcap).context("failed to wait dumpcap")?;
 

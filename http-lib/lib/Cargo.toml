@@ -10,7 +10,7 @@ const-hex.workspace = true
 tar.workspace = true
 rustix = { workspace = true, features = ["runtime", "process", "thread"] }
 rustls = "0.23.21"
-webpki-roots = "0.26.7"
+webpki-roots = "1.0.7"
 # logging
 valuable.workspace = true
 tracing.workspace = true
