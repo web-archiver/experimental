@@ -27,6 +27,7 @@ use crate::{
 };
 
 mod compressible;
+mod connector;
 mod object;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, GCborCodec)]
