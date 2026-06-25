@@ -22,6 +22,8 @@ pub use webar_core_macros::{FromGCbor, GCborOrd, ToGCbor};
 pub mod internal {
     const ENUM_TAG: u64 = 27;
     const UUID_TAG: u64 = 37;
+    const IPV4_TAG: u64 = 52;
+    const IPV6_TAG: u64 = 54;
 
     pub extern crate core;
 

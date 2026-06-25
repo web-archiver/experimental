@@ -1,4 +1,8 @@
-use std::{fmt::Display, mem::MaybeUninit};
+use std::{
+    fmt::Display,
+    mem::MaybeUninit,
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6},
+};
 
 pub use ciborium_io::Read;
 use ciborium_ll::{simple, Header};
@@ -566,5 +570,81 @@ impl<'buf> FromGCbor<'buf> for uuid::Uuid {
                 .map(|v| uuid::Uuid::from_bytes(v.to_owned())),
             h => Err(Error::type_error(ty, "16 bytes uuid", h)),
         }
+    }
+}
+
+fn decode_ipv4_bytes(ty: TypeInfo, decoder: Decoder<'_, '_>) -> Result<Ipv4Addr, Error> {
+    const IPV4_LEN: usize = (Ipv4Addr::BITS / 8) as usize;
+    match decoder.0.pull(ty)? {
+        Header::Bytes(Some(IPV4_LEN)) => Ok(Ipv4Addr::from_octets(*decoder.0.read_chunk(ty)?)),
+        h => Err(Error::type_error(ty, "4 bytes ipv4 address", h)),
+    }
+}
+impl<'buf> FromGCbor<'buf> for Ipv4Addr {
+    fn decode(decoder: Decoder<'_, 'buf>) -> Result<Self, Error> {
+        let ty = TypeInfo::new::<Self>();
+        match decoder.0.pull(ty)? {
+            Header::Tag(super::IPV4_TAG) => (),
+            h => return Err(Error::type_error(ty, "ipv4 tag", h)),
+        }
+        decode_ipv4_bytes(ty, decoder)
+    }
+}
+fn decode_ipv6_bytes(ty: TypeInfo, decoder: Decoder<'_, '_>) -> Result<Ipv6Addr, Error> {
+    const IPV6_LEN: usize = (Ipv6Addr::BITS / 8) as usize;
+    match decoder.0.pull(ty)? {
+        Header::Bytes(Some(IPV6_LEN)) => Ok(Ipv6Addr::from_octets(*decoder.0.read_chunk(ty)?)),
+        h => Err(Error::type_error(ty, "16 bytes ipv6 address", h)),
+    }
+}
+impl<'buf> FromGCbor<'buf> for Ipv6Addr {
+    fn decode(decoder: Decoder<'_, 'buf>) -> Result<Self, Error> {
+        let ty = TypeInfo::new::<Self>();
+        match decoder.0.pull(ty)? {
+            Header::Tag(super::IPV6_TAG) => (),
+            h => return Err(Error::type_error(ty, "ipv6 tag", h)),
+        }
+        decode_ipv6_bytes(ty, decoder)
+    }
+}
+impl<'buf> FromGCbor<'buf> for IpAddr {
+    fn decode(decoder: Decoder<'_, 'buf>) -> Result<Self, Error> {
+        let ty = TypeInfo::new::<Self>();
+        match decoder.0.pull(ty)? {
+            Header::Tag(super::IPV4_TAG) => decode_ipv4_bytes(ty, decoder).map(Self::V4),
+            Header::Tag(super::IPV6_TAG) => decode_ipv6_bytes(ty, decoder).map(Self::V6),
+            h => Err(Error::type_error(ty, "ipv4 or ipv6 tag", h)),
+        }
+    }
+}
+
+fn decode_socket_addr<'buf, Ip: FromGCbor<'buf>, T>(
+    ty: TypeInfo,
+    decoder: Decoder<'_, 'buf>,
+    con: impl FnOnce(Ip, u16) -> T,
+) -> Result<T, Error> {
+    match decoder.0.pull(ty)? {
+        Header::Array(Some(2)) => (),
+        h => return Err(Error::type_error(ty, "array of ip port", h)),
+    }
+    let ip = Ip::decode(Decoder(&mut *decoder.0))?;
+    let port = u16::decode(Decoder(&mut *decoder.0))?;
+    Ok(con(ip, port))
+}
+impl<'buf> FromGCbor<'buf> for SocketAddrV4 {
+    fn decode(decoder: Decoder<'_, 'buf>) -> Result<Self, Error> {
+        decode_socket_addr(TypeInfo::new::<Self>(), decoder, Self::new)
+    }
+}
+impl<'buf> FromGCbor<'buf> for SocketAddrV6 {
+    fn decode(decoder: Decoder<'_, 'buf>) -> Result<Self, Error> {
+        decode_socket_addr(TypeInfo::new::<Self>(), decoder, |ip, port| {
+            Self::new(ip, port, 0, 0)
+        })
+    }
+}
+impl<'buf> FromGCbor<'buf> for SocketAddr {
+    fn decode(decoder: Decoder<'_, 'buf>) -> Result<Self, Error> {
+        decode_socket_addr(TypeInfo::new::<Self>(), decoder, Self::new)
     }
 }

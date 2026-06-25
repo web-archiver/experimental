@@ -377,6 +377,76 @@ mod uuid {
     }
 }
 
+mod ip {
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
+
+    use crate::test_success;
+
+    struct TestCase<T> {
+        val: T,
+        encoded: &'static [u8],
+    }
+    const IPV4_0: TestCase<Ipv4Addr> = TestCase {
+        val: Ipv4Addr::from_octets([192, 0, 2, 1]),
+        encoded: include_bytes!("./data/ipv4_0.bin"),
+    };
+    const IPV6_0: TestCase<Ipv6Addr> = TestCase {
+        val: Ipv6Addr::from_segments([
+            0x2001, 0xdb8, 0x1234, 0xdeed, 0xbeef, 0xcafe, 0xface, 0xfeed,
+        ]),
+        encoded: include_bytes!("./data/ipv6_0.bin"),
+    };
+    const SOCKET_V4_0: TestCase<SocketAddrV4> = TestCase {
+        val: SocketAddrV4::new(Ipv4Addr::from_octets([192, 0, 2, 1]), 80),
+        encoded: include_bytes!("./data/socket_v4_0.bin"),
+    };
+    const SOCKET_V6_0: TestCase<SocketAddrV6> = TestCase {
+        val: SocketAddrV6::new(
+            Ipv6Addr::from_segments([
+                0x2001, 0xdb8, 0x1234, 0xdeed, 0xbeef, 0xcafe, 0xface, 0xfeed,
+            ]),
+            80,
+            0,
+            0,
+        ),
+        encoded: include_bytes!("./data/socket_v6_0.bin"),
+    };
+
+    #[test]
+    fn ipv4_addr() {
+        test_success(IPV4_0.val, IPV4_0.encoded);
+    }
+    #[test]
+    fn ipv6_addr() {
+        test_success(IPV6_0.val, IPV6_0.encoded);
+    }
+    #[test]
+    fn ip_addr_v4() {
+        test_success(IpAddr::V4(IPV4_0.val), IPV4_0.encoded);
+    }
+    #[test]
+    fn ip_addr_v6() {
+        test_success(IpAddr::V6(IPV6_0.val), IPV6_0.encoded);
+    }
+
+    #[test]
+    fn ipv4_socket() {
+        test_success(SOCKET_V4_0.val, SOCKET_V4_0.encoded);
+    }
+    #[test]
+    fn ipv6_socket() {
+        test_success(SOCKET_V6_0.val, SOCKET_V6_0.encoded);
+    }
+    #[test]
+    fn socket_addr_v4() {
+        test_success(SocketAddr::V4(SOCKET_V4_0.val), SOCKET_V4_0.encoded);
+    }
+    #[test]
+    fn socket_addr_v6() {
+        test_success(SocketAddr::V6(SOCKET_V6_0.val), SOCKET_V6_0.encoded);
+    }
+}
+
 mod gcbor_set {
     use webar_core::codec::gcbor::set::GCborSet;
 

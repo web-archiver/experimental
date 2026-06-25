@@ -1,8 +1,13 @@
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
+
 pub use ciborium_io::Write;
 use ciborium_ll::Header;
 use uuid::Uuid;
 
-use crate::text::normalized::{NFStr, NFString};
+use crate::{
+    codec::gcbor::internal::{IPV4_TAG, IPV6_TAG},
+    text::normalized::{NFStr, NFString},
+};
 
 use super::{TypeInfo, ENUM_TAG, UUID_TAG};
 
@@ -267,5 +272,59 @@ impl ToGCbor for Uuid {
         encoder.0.push(Header::Tag(UUID_TAG))?;
         encoder.0.push(Header::Bytes(Some(16)))?;
         encoder.0.write_all(self.as_bytes()).map_err(Error)
+    }
+}
+
+impl ToGCbor for Ipv4Addr {
+    fn encode<W: Write>(&self, encoder: Encoder<W>) -> Result<(), Error<W::Error>> {
+        encoder.0.push(Header::Tag(IPV4_TAG))?;
+        let bs = self.octets();
+        encoder.0.push(Header::Bytes(Some(bs.len() as usize)))?;
+        encoder.0.write_all(&bs).map_err(Error)
+    }
+}
+impl ToGCbor for Ipv6Addr {
+    fn encode<W: Write>(&self, encoder: Encoder<W>) -> Result<(), Error<W::Error>> {
+        encoder.0.push(Header::Tag(IPV6_TAG))?;
+        let bs = self.octets();
+        encoder.0.push(Header::Bytes(Some(bs.len() as usize)))?;
+        encoder.0.write_all(&bs).map_err(Error)
+    }
+}
+impl ToGCbor for IpAddr {
+    fn encode<W: Write>(&self, encoder: Encoder<W>) -> Result<(), Error<W::Error>> {
+        match self {
+            Self::V4(v4) => v4.encode(encoder),
+            Self::V6(v6) => v6.encode(encoder),
+        }
+    }
+}
+
+fn encode_socket_addr<W: Write>(
+    ip: &impl ToGCbor,
+    port: u16,
+    encoder: Encoder<W>,
+) -> Result<(), Error<W::Error>> {
+    encoder.0.push(Header::Array(Some(2)))?;
+    ip.encode(Encoder(&mut *encoder.0))?;
+    encoder.0.push(Header::Positive(port as u64))?;
+    Ok(())
+}
+impl ToGCbor for SocketAddrV4 {
+    fn encode<W: Write>(&self, encoder: Encoder<W>) -> Result<(), Error<W::Error>> {
+        encode_socket_addr(self.ip(), self.port(), encoder)
+    }
+}
+impl ToGCbor for SocketAddrV6 {
+    fn encode<W: Write>(&self, encoder: Encoder<W>) -> Result<(), Error<W::Error>> {
+        encode_socket_addr(self.ip(), self.port(), encoder)
+    }
+}
+impl ToGCbor for SocketAddr {
+    fn encode<W: Write>(&self, encoder: Encoder<W>) -> Result<(), Error<W::Error>> {
+        match self {
+            Self::V4(v4) => v4.encode(encoder),
+            Self::V6(v6) => v6.encode(encoder),
+        }
     }
 }
