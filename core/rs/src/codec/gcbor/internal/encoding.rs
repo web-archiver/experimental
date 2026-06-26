@@ -132,7 +132,10 @@ impl<'a, W: Write> StructEncoder<'a, W> {
 
 pub struct ListEncoder<'a, W: Write>(&'a mut ciborium_ll::Encoder<W>);
 impl<'a, W: Write> ListEncoder<'a, W> {
-    pub fn encode_element<D: ToGCbor>(&mut self, value: &D) -> Result<(), Error<W::Error>> {
+    pub fn encode_element<D: ToGCbor + ?Sized>(
+        &mut self,
+        value: &D,
+    ) -> Result<(), Error<W::Error>> {
         value.encode(Encoder(&mut *self.0))
     }
     pub fn end(self) -> Result<(), Error<W::Error>> {

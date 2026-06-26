@@ -53,7 +53,17 @@ impl KeyLogInner {
 }
 
 #[derive(Debug)]
-struct FileKeyLog(Mutex<KeyLogInner>);
+pub(crate) struct FileKeyLog(Mutex<KeyLogInner>);
+impl FileKeyLog {
+    pub(crate) fn new(root: BorrowedFd) -> Result<Self, rustix::io::Errno> {
+        Ok(Self(Mutex::new(KeyLogInner {
+            bin: create_file(root, SSL_KEYLOG_BIN.c_path)?.into(),
+            bin_buf: ValueBuf::new(),
+            text_buf: Vec::new(),
+            text: create_file(root, SSL_KEYLOG_TXT.c_path)?.into(),
+        })))
+    }
+}
 impl KeyLog for FileKeyLog {
     fn will_log(&self, _: &str) -> bool {
         true
@@ -72,7 +82,7 @@ pub fn global_init() {
         .install_default()
         .unwrap()
 }
-pub fn new_client_cfg(root: BorrowedFd) -> anyhow::Result<ClientConfig> {
+pub fn new_client_cfg(root: BorrowedFd) -> Result<ClientConfig, rustix::io::Errno> {
     let mut ret = ClientConfig::builder()
         .with_root_certificates(Arc::new(rustls::RootCertStore {
             roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
@@ -80,15 +90,6 @@ pub fn new_client_cfg(root: BorrowedFd) -> anyhow::Result<ClientConfig> {
         .with_no_client_auth();
     ret.enable_sni = true;
     ret.alpn_protocols = Vec::from([b"http/1.1".to_vec(), b"h2".to_vec()]);
-    ret.key_log = Arc::new(FileKeyLog(Mutex::new(KeyLogInner {
-        bin: create_file(root, SSL_KEYLOG_BIN.c_path)
-            .context("failed to create binary keylog file")?
-            .into(),
-        bin_buf: ValueBuf::new(),
-        text_buf: Vec::new(),
-        text: create_file(root, SSL_KEYLOG_TXT.c_path)
-            .context("failed to create text keylog file")?
-            .into(),
-    })));
+    ret.key_log = Arc::new(FileKeyLog::new(root)?);
     Ok(ret)
 }

@@ -51,6 +51,7 @@ pub mod internal {
 pub mod support {
     pub mod http;
     pub mod store;
+    pub mod tls;
     pub mod tracing;
 }
 
