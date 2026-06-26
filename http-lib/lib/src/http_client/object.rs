@@ -24,7 +24,7 @@ pub fn from_header_map<'a>(mp: &'a reqwest::header::HeaderMap) -> HeaderMap<'a> 
     ret
 }
 
-#[derive(ToGCbor)]
+#[derive(Debug, Clone, ToGCbor)]
 pub struct Timing {
     pub start: Timestamp,
     pub sent_header: Timestamp,

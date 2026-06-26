@@ -1,0 +1,238 @@
+use std::{
+    convert::Infallible,
+    pin::Pin,
+    sync::{Arc, LazyLock, OnceLock},
+    task::Poll,
+};
+
+use bytes::Buf;
+use http::{HeaderMap, Request, Response};
+use indicatif::ProgressStyle;
+use tracing::Instrument;
+use tracing_indicatif::span_ext::IndicatifSpanExt;
+
+use webar_core::{codec::gcbor::ToGCbor, time::Timestamp};
+
+const BASE_TEMPLATE: &str = "{span_child_prefix} {spinner} {msg}";
+const BAR_TEMPLATE: &str = concat!(
+    "{span_child_prefix} ",
+    "{wide_bar} {percent}% ",
+    "{bytes}/{total_bytes} {bytes_per_sec} ",
+    "{eta} ",
+    "{msg}"
+);
+const SPINNER_TEMPLATE: &str = concat!(
+    "{span_child_prefix} {spinner} ",
+    "{bytes} {bytes_per_sec} ",
+    "{msg}"
+);
+macro_rules! static_style {
+    ($n:ident, $t:expr) => {
+        static $n: LazyLock<ProgressStyle> =
+            LazyLock::new(|| ProgressStyle::with_template($t).unwrap());
+    };
+}
+static_style!(BASE_STYLE, BASE_TEMPLATE);
+static_style!(BAR_STYLE, BAR_TEMPLATE);
+static_style!(SPINNER_STYLE, SPINNER_TEMPLATE);
+
+#[derive(Debug, Clone, ToGCbor)]
+pub struct Timing {
+    pub start: Timestamp,
+    pub sent_header: Timestamp,
+    #[gcbor(omissible)]
+    pub sent_body: Option<Timestamp>,
+    pub recv_header: Timestamp,
+    pub recv_body: Timestamp,
+}
+
+#[derive(Debug)]
+pub struct TimedBody {
+    sent_header: Arc<OnceLock<Timestamp>>,
+    sent_body: Arc<OnceLock<Option<Timestamp>>>,
+    data: Option<bytes::Bytes>,
+}
+impl http_body::Body for TimedBody {
+    type Data = bytes::Bytes;
+    type Error = Infallible;
+    fn poll_frame(
+        mut self: Pin<&mut Self>,
+        _: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Result<http_body::Frame<Self::Data>, Self::Error>>> {
+        match self.data.take() {
+            Some(d) if d.is_empty() => {
+                self.sent_header.set(Timestamp::now()).unwrap();
+                self.sent_body.set(None).unwrap();
+                Poll::Ready(None)
+            }
+            Some(d) => {
+                self.sent_header.set(Timestamp::now()).unwrap();
+                Poll::Ready(Some(Ok(http_body::Frame::data(d))))
+            }
+            None => {
+                let _ = self.sent_body.set(Some(Timestamp::now()));
+                Poll::Ready(None)
+            }
+        }
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum Error<ER, EB> {
+    #[error("failed to send request")]
+    Request(#[source] ER),
+    #[error("failed to receive response body")]
+    RecvBody(#[source] EB),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FrameState {
+    Data,
+    Trailer,
+    Done,
+}
+#[derive(Debug)]
+pub struct ResponseBody {
+    pub data: bytes::Bytes,
+    pub trailers: Option<http::HeaderMap>,
+    state: FrameState,
+}
+impl http_body::Body for ResponseBody {
+    type Data = bytes::Bytes;
+    type Error = Infallible;
+    fn poll_frame(
+        mut self: Pin<&mut Self>,
+        _: &mut std::task::Context<'_>,
+    ) -> Poll<Option<Result<http_body::Frame<Self::Data>, Self::Error>>> {
+        match self.state {
+            FrameState::Data => {
+                self.state = if self.trailers.is_some() {
+                    FrameState::Trailer
+                } else {
+                    FrameState::Done
+                };
+                Poll::Ready(Some(Ok(http_body::Frame::data(self.data.clone()))))
+            }
+            FrameState::Trailer => Poll::Ready(Some(Ok(http_body::Frame::trailers(
+                self.trailers.clone().unwrap_or_default(),
+            )))),
+            FrameState::Done => Poll::Ready(None),
+        }
+    }
+    fn size_hint(&self) -> http_body::SizeHint {
+        http_body::SizeHint::with_exact(self.data.len() as u64)
+    }
+    fn is_end_stream(&self) -> bool {
+        self.state == FrameState::Done
+    }
+}
+
+#[derive(Debug)]
+pub struct TimingService<S> {
+    inner: S,
+}
+impl<S> TimingService<S> {
+    pub fn new(inner: S) -> Self {
+        Self { inner }
+    }
+}
+impl<B, S> tower_service::Service<Request<bytes::Bytes>> for TimingService<S>
+where
+    S: tower_service::Service<Request<TimedBody>, Response = Response<B>>,
+    S::Future: Send + Sync + 'static,
+    B: http_body::Body + Send + Sync + 'static,
+{
+    type Response = Response<ResponseBody>;
+    type Error = Error<S::Error, B::Error>;
+    type Future = Pin<
+        Box<dyn std::future::Future<Output = Result<Self::Response, Self::Error>> + Send + Sync>,
+    >;
+    fn poll_ready(
+        &mut self,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Result<(), Self::Error>> {
+        self.inner.poll_ready(cx).map_err(Error::Request)
+    }
+    fn call(&mut self, req: Request<bytes::Bytes>) -> Self::Future {
+        let span = tracing::info_span!("message_timing", indicatif.pb_show = tracing::field::Empty);
+
+        let sent_header = Arc::new(OnceLock::new());
+        let sent_body = Arc::new(OnceLock::new());
+
+        span.pb_set_message("sending request");
+        span.pb_set_style(&BASE_STYLE);
+
+        let fut = self.inner.call({
+            let (parts, body) = req.into_parts();
+            Request::from_parts(
+                parts,
+                TimedBody {
+                    sent_header: Arc::clone(&sent_header),
+                    sent_body: Arc::clone(&sent_body),
+                    data: Some(body),
+                },
+            )
+        });
+        let start_ts = Timestamp::now();
+        Box::pin(
+            async move {
+                let (mut parts, body) = fut.await.map_err(Error::Request)?.into_parts();
+                let recv_header = Timestamp::now();
+
+                let span = tracing::Span::current();
+                span.pb_set_message("receiving body");
+                match body.size_hint().upper() {
+                    Some(l) => {
+                        span.pb_set_length(l);
+                        span.pb_set_style(&BAR_STYLE);
+                    }
+                    None => span.pb_set_style(&SPINNER_STYLE),
+                };
+                let mut body_buf = body.size_hint().upper().map_or_else(
+                    || bytes::BytesMut::new(),
+                    |l| bytes::BytesMut::with_capacity(l as usize),
+                );
+                let mut body = std::pin::pin!(body);
+                let mut has_trailers = false;
+                let mut trailers = HeaderMap::new();
+                while let Some(r) = std::future::poll_fn(|ctx| body.as_mut().poll_frame(ctx)).await
+                {
+                    match r.map_err(Error::RecvBody)?.into_data() {
+                        Ok(mut d) => {
+                            span.pb_inc(d.remaining() as u64);
+                            while d.has_remaining() {
+                                let c = d.chunk();
+                                body_buf.extend_from_slice(c);
+                                d.advance(c.len());
+                            }
+                        }
+                        Err(e) => {
+                            has_trailers = true;
+                            trailers.extend(match e.into_trailers() {
+                                Ok(t) => t.into_iter(),
+                                Err(_) => unreachable!(),
+                            });
+                        }
+                    }
+                }
+
+                parts.extensions.insert(super::object::Timing {
+                    start: start_ts,
+                    sent_header: *sent_header.wait(),
+                    sent_body: *sent_body.wait(),
+                    recv_header,
+                    recv_body: Timestamp::now(),
+                });
+                Ok(Response::from_parts(
+                    parts,
+                    ResponseBody {
+                        data: body_buf.freeze(),
+                        trailers: if has_trailers { Some(trailers) } else { None },
+                        state: FrameState::Data,
+                    },
+                ))
+            }
+            .instrument(span),
+        )
+    }
+}

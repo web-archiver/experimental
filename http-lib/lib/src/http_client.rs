@@ -29,6 +29,7 @@ use crate::{
 mod compressible;
 mod connector;
 mod object;
+mod timing;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, GCborCodec)]
 #[gcbor(transparent)]
