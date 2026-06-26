@@ -22,6 +22,8 @@ const TMP_DIR: FilePath = FilePath::new_throw(c"blob/tmp");
 type IncrementalInfo =
     webar_http_lib_core::blob::IncrementalInfo<GCborSet<Digest>, GCborMap<Digest, Info>>;
 
+pub type Error = anyhow::Error;
+
 pub struct BlobWriter {
     file: std::io::BufWriter<std::fs::File>,
     size: usize,
@@ -126,7 +128,7 @@ impl BlobStore {
         })
     }
 
-    fn update_info(&self, digest: &Digest, info: Info) {
+    pub fn update_info(&self, digest: &Digest, info: Info) {
         use gcbor::map;
         match self
             .incremental_info

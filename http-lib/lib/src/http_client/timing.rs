@@ -128,6 +128,27 @@ impl http_body::Body for ResponseBody {
 }
 
 #[derive(Debug)]
+pub struct TimingResponse {
+    pub parts: http::response::Parts,
+    pub data: bytes::Bytes,
+    pub trailers: Option<http::HeaderMap>,
+    pub timing: Timing,
+}
+impl From<TimingResponse> for http::Response<ResponseBody> {
+    fn from(mut value: TimingResponse) -> Self {
+        value.parts.extensions.insert(value.timing);
+        Self::from_parts(
+            value.parts,
+            ResponseBody {
+                data: value.data,
+                trailers: value.trailers,
+                state: FrameState::Data,
+            },
+        )
+    }
+}
+
+#[derive(Debug)]
 pub struct TimingService<S> {
     inner: S,
 }
@@ -142,7 +163,7 @@ where
     S::Future: Send + Sync + 'static,
     B: http_body::Body + Send + Sync + 'static,
 {
-    type Response = Response<ResponseBody>;
+    type Response = TimingResponse;
     type Error = Error<S::Error, B::Error>;
     type Future = Pin<
         Box<dyn std::future::Future<Output = Result<Self::Response, Self::Error>> + Send + Sync>,
@@ -176,7 +197,7 @@ where
         let start_ts = Timestamp::now();
         Box::pin(
             async move {
-                let (mut parts, body) = fut.await.map_err(Error::Request)?.into_parts();
+                let (parts, body) = fut.await.map_err(Error::Request)?.into_parts();
                 let recv_header = Timestamp::now();
 
                 let span = tracing::Span::current();
@@ -215,22 +236,20 @@ where
                         }
                     }
                 }
+                let recv_body = Timestamp::now();
 
-                parts.extensions.insert(super::object::Timing {
-                    start: start_ts,
-                    sent_header: *sent_header.wait(),
-                    sent_body: *sent_body.wait(),
-                    recv_header,
-                    recv_body: Timestamp::now(),
-                });
-                Ok(Response::from_parts(
+                Ok(TimingResponse {
                     parts,
-                    ResponseBody {
-                        data: body_buf.freeze(),
-                        trailers: if has_trailers { Some(trailers) } else { None },
-                        state: FrameState::Data,
+                    data: body_buf.freeze(),
+                    trailers: if has_trailers { Some(trailers) } else { None },
+                    timing: Timing {
+                        start: start_ts,
+                        sent_header: *sent_header.wait(),
+                        sent_body: *sent_body.wait(),
+                        recv_header,
+                        recv_body,
                     },
-                ))
+                })
             }
             .instrument(span),
         )

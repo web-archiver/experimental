@@ -24,7 +24,7 @@ pub mod blob {
         pub additional: A,
     }
 
-    #[derive(Debug, webar_core::codec::gcbor::GCborCodec)]
+    #[derive(Debug, Clone, webar_core::codec::gcbor::GCborCodec)]
     pub struct Info {
         pub size: u64,
         /// [None] means compressibility is unknown
