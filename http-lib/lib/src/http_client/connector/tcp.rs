@@ -5,6 +5,7 @@ use std::{
     mem::MaybeUninit,
     net::SocketAddr,
     os::fd::{AsFd, AsRawFd, OwnedFd},
+    pin::Pin,
     sync::Arc,
     task::Poll,
     time::{Duration, Instant},
@@ -16,10 +17,11 @@ use hyper_util::{client::legacy::connect::HttpConnector, rt::TokioIo};
 use tower::Service;
 use uuid::Uuid;
 use webar_core::{
-    codec::gcbor::{GCborCodec, ValueBuf},
+    bytes::Bytes,
+    codec::gcbor::{GCborCodec, ToGCbor, ValueBuf},
     time::Timestamp,
 };
-use webar_http_lib_core::utils::{create_dir, create_file, write_file};
+use webar_http_lib_core::utils::{create_file, open_new_dir, write_file};
 
 const STATUS_DURATION: Duration = Duration::from_millis(128);
 
@@ -30,13 +32,14 @@ pub(crate) struct Timing {
 }
 
 #[derive(Debug, Clone, GCborCodec)]
-pub(crate) struct ConnectionInfo {
+pub(crate) struct ConnectionInfoInner {
     pub(crate) seq: u64,
     pub(crate) uuid: Uuid,
     pub(crate) local_addr: SocketAddr,
     pub(crate) peer_addr: SocketAddr,
     pub(crate) timing: Timing,
 }
+pub type ConnectionInfo = Arc<ConnectionInfoInner>;
 
 macro_rules! def_tcp_info {
     ($(($f:ident, $src:ident, $t:ty),)*) => {
@@ -88,22 +91,24 @@ def_tcp_info!(
     (total_retrans, tcpi_total_retrans, u32),
 );
 
-#[derive(GCborCodec)]
+#[derive(ToGCbor)]
 #[gcbor(rename_variants = "snake_case")]
-enum EventKind {
-    Status(TcpInfo),
+enum EventKind<'a> {
+    Status { info: TcpInfo, raw: &'a Bytes },
     ShutdownStart,
     ShutdownDone,
+    Drop,
 }
-#[derive(GCborCodec)]
-struct Event {
+#[derive(ToGCbor)]
+struct Event<'a> {
     timestamp: Timestamp,
-    kind: EventKind,
+    kind: EventKind<'a>,
 }
 
-#[pin_project::pin_project]
+#[pin_project::pin_project(PinnedDrop)]
 pub struct Connection {
-    info: Arc<ConnectionInfo>,
+    meta: super::ConnectionMeta,
+    info: ConnectionInfo,
     next_status_check: Instant,
     event_log: std::fs::File,
     log_buf: ValueBuf,
@@ -112,7 +117,7 @@ pub struct Connection {
     conn: TokioIo<tokio::net::TcpStream>,
 }
 impl Connection {
-    fn write_event(&mut self, kind: EventKind) {
+    fn write_event(&mut self, kind: EventKind<'_>) {
         let v = self.log_buf.encode(&Event {
             timestamp: Timestamp::now(),
             kind,
@@ -130,14 +135,14 @@ impl Connection {
         if now_instant < self.next_status_check {
             return Ok(());
         }
-        let val = unsafe {
-            let mut ret = MaybeUninit::<libc::tcp_info>::zeroed();
-            let mut len = 0;
+        let mut info_buf = MaybeUninit::<libc::tcp_info>::zeroed();
+        let (val, raw_val) = unsafe {
+            let mut len = size_of::<libc::tcp_info>() as u32;
             if libc::getsockopt(
                 self.conn.inner().as_raw_fd(),
                 libc::IPPROTO_TCP,
                 libc::TCP_INFO,
-                ret.as_mut_ptr().cast(),
+                info_buf.as_mut_ptr().cast(),
                 &raw mut len,
             ) != 0
             {
@@ -149,15 +154,22 @@ impl Connection {
                 );
                 return Err(e);
             }
-            ret.assume_init()
+            (
+                info_buf.assume_init_ref(),
+                std::slice::from_raw_parts(info_buf.as_ptr().cast::<u8>(), len as usize),
+            )
         };
-        self.write_event(EventKind::Status(TcpInfo::from_libc(&val)));
+        self.write_event(EventKind::Status {
+            info: TcpInfo::from_libc(&val),
+            raw: Bytes::new(raw_val),
+        });
         self.next_status_check = now_instant + STATUS_DURATION;
         Ok(())
     }
     fn write_status(&mut self) {
         if let Err(e) = self.try_write_status() {
             tracing::error!(
+                conn = %self.info.uuid,
                 error = &e as &dyn std::error::Error,
                 "failed to write status",
             );
@@ -166,7 +178,7 @@ impl Connection {
 }
 impl Read for Connection {
     fn poll_read(
-        mut self: std::pin::Pin<&mut Self>,
+        mut self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
         buf: hyper::rt::ReadBufCursor<'_>,
     ) -> Poll<Result<(), std::io::Error>> {
@@ -179,7 +191,7 @@ impl Write for Connection {
         self.conn.is_write_vectored()
     }
     fn poll_write(
-        mut self: std::pin::Pin<&mut Self>,
+        mut self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
         buf: &[u8],
     ) -> Poll<Result<usize, std::io::Error>> {
@@ -187,7 +199,7 @@ impl Write for Connection {
         self.project().conn.poll_write(cx, buf)
     }
     fn poll_write_vectored(
-        mut self: std::pin::Pin<&mut Self>,
+        mut self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
         bufs: &[std::io::IoSlice<'_>],
     ) -> Poll<Result<usize, std::io::Error>> {
@@ -195,14 +207,14 @@ impl Write for Connection {
         self.project().conn.poll_write_vectored(cx, bufs)
     }
     fn poll_flush(
-        mut self: std::pin::Pin<&mut Self>,
+        mut self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> Poll<Result<(), std::io::Error>> {
         self.as_mut().write_status();
         self.project().conn.poll_flush(cx)
     }
     fn poll_shutdown(
-        mut self: std::pin::Pin<&mut Self>,
+        mut self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> Poll<Result<(), std::io::Error>> {
         self.as_mut().write_status();
@@ -221,7 +233,16 @@ impl Write for Connection {
 }
 impl hyper_util::client::legacy::connect::Connection for Connection {
     fn connected(&self) -> hyper_util::client::legacy::connect::Connected {
-        self.conn.connected().extra(Arc::clone(&self.info))
+        self.conn
+            .connected()
+            .extra(Arc::clone(&self.meta))
+            .extra(Arc::clone(&self.info))
+    }
+}
+#[pin_project::pinned_drop]
+impl PinnedDrop for Connection {
+    fn drop(mut self: Pin<&mut Self>) {
+        self.write_event(EventKind::Drop);
     }
 }
 
@@ -257,7 +278,7 @@ impl Future for ConnectFuture {
                     let pa = tcp_conn.peer_addr()?;
                     Ok((la, pa))
                 }) {
-                    Ok((la, pa)) => Arc::new(ConnectionInfo {
+                    Ok((la, pa)) => Arc::new(ConnectionInfoInner {
                         seq: *proj.seq,
                         uuid: uuid::Uuid::new_v4(),
                         local_addr: la,
@@ -273,31 +294,26 @@ impl Future for ConnectFuture {
                 let mut val_buf = ValueBuf::new();
 
                 let uuid = uuid::Uuid::new_v4();
-                let mut dir_buf = Vec::new();
-                let _ = write!(&mut dir_buf, "{uuid}\0");
-                match create_dir(
+                let mut dir_buf = [0; uuid::fmt::Hyphenated::LENGTH + 1];
+                uuid.as_hyphenated().encode_lower(&mut dir_buf);
+                match open_new_dir(
                     proj.log_root.as_fd(),
                     CStr::from_bytes_with_nul(&dir_buf).unwrap(),
                 )
-                .and_then(|_| {
-                    dir_buf.clear();
-                    let _ = write!(&mut dir_buf, "{uuid}/info.bin\0");
-                    let v = val_buf.encode(info.as_ref());
+                .and_then(|dir| {
                     write_file(
-                        proj.log_root.as_fd(),
-                        CStr::from_bytes_with_nul(&dir_buf).unwrap(),
-                        v.as_bytes(),
+                        dir.as_fd(),
+                        c"tcp_info.bin",
+                        val_buf.encode(info.as_ref()).as_bytes(),
                     )?;
-
-                    dir_buf.clear();
-                    let _ = write!(&mut dir_buf, "{uuid}/events.bin\0");
-                    create_file(
-                        proj.log_root.as_fd(),
-                        CStr::from_bytes_with_nul(&dir_buf).unwrap(),
-                    )
+                    Ok((create_file(dir.as_fd(), c"tcp_events.bin")?, dir))
                 }) {
-                    Ok(event_file) => {
+                    Ok((event_file, dir)) => {
                         let mut ret = Connection {
+                            meta: Arc::new(super::ConnMetaInner {
+                                uuid: info.uuid,
+                                data_root: dir,
+                            }),
                             info,
                             next_status_check: Instant::now(),
                             event_log: event_file.into(),
