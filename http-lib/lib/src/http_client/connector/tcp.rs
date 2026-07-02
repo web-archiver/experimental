@@ -25,6 +25,17 @@ use webar_http_lib_core::utils::{create_file, open_new_dir, write_file};
 
 const STATUS_DURATION: Duration = Duration::from_millis(128);
 
+pub struct CaptureHandshake;
+impl super::capture::Config<Connection> for CaptureHandshake {
+    const RX_MAX_SIZE: Option<std::num::NonZeroU64> = std::num::NonZeroU64::new(512 * 1024);
+    const RX_PATH: &'static CStr = c"tcp_rx_data.bin";
+    const TX_MAX_SIZE: Option<std::num::NonZeroU64> = std::num::NonZeroU64::new(512 * 1024);
+    const TX_PATH: &'static CStr = c"tcp_tx_data.bin";
+    fn should_capture(_: &Connection) -> bool {
+        true
+    }
+}
+
 #[derive(Debug, Clone, GCborCodec)]
 pub(crate) struct Timing {
     pub(crate) init: Timestamp,
@@ -107,7 +118,7 @@ struct Event<'a> {
 
 #[pin_project::pin_project(PinnedDrop)]
 pub struct Connection {
-    meta: super::ConnectionMeta,
+    data_root: OwnedFd,
     info: ConnectionInfo,
     next_status_check: Instant,
     event_log: std::fs::File,
@@ -235,8 +246,18 @@ impl hyper_util::client::legacy::connect::Connection for Connection {
     fn connected(&self) -> hyper_util::client::legacy::connect::Connected {
         self.conn
             .connected()
-            .extra(Arc::clone(&self.meta))
+            .extra(super::ConnMeta {
+                uuid: self.info.uuid,
+            })
             .extra(Arc::clone(&self.info))
+    }
+}
+impl super::ConnectionExt for Connection {
+    fn uuid(&self) -> uuid::Uuid {
+        self.info.uuid
+    }
+    fn data_root(&self) -> std::os::fd::BorrowedFd<'_> {
+        self.data_root.as_fd()
     }
 }
 #[pin_project::pinned_drop]
@@ -310,10 +331,7 @@ impl Future for ConnectFuture {
                 }) {
                     Ok((event_file, dir)) => {
                         let mut ret = Connection {
-                            meta: Arc::new(super::ConnMetaInner {
-                                uuid: info.uuid,
-                                data_root: dir,
-                            }),
+                            data_root: dir,
                             info,
                             next_status_check: Instant::now(),
                             event_log: event_file.into(),

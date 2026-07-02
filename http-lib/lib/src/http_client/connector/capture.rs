@@ -1,16 +1,13 @@
 use std::{
-    ffi::CStr,
-    future::Future,
-    io::Write,
-    marker::PhantomData,
-    num::NonZeroU64,
-    os::fd::{AsFd, BorrowedFd},
+    ffi::CStr, future::Future, io::Write, marker::PhantomData, num::NonZeroU64, os::fd::BorrowedFd,
     task::Poll,
 };
 
 use webar_http_lib_core::utils::create_file;
 
-pub trait Config<C>: Copy {
+use crate::http_client::connector::ConnectionExt;
+
+pub trait Config<C> {
     const TX_PATH: &'static CStr;
     const TX_MAX_SIZE: Option<NonZeroU64>;
     const RX_PATH: &'static CStr;
@@ -136,6 +133,14 @@ where
         hyper_util::client::legacy::connect::Connection::connected(&self.conn)
     }
 }
+impl<C: ConnectionExt> ConnectionExt for Connection<C> {
+    fn uuid(&self) -> uuid::Uuid {
+        self.conn.uuid()
+    }
+    fn data_root(&self) -> BorrowedFd<'_> {
+        self.conn.data_root()
+    }
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error<E> {
@@ -156,7 +161,7 @@ impl<Cfg, F, C, E> Future for ConnectFuture<Cfg, F>
 where
     Cfg: Config<C>,
     F: Future<Output = Result<C, E>>,
-    C: hyper_util::client::legacy::connect::Connection,
+    C: hyper_util::client::legacy::connect::Connection + ConnectionExt,
 {
     type Output = Result<Connection<C>, Error<E>>;
     fn poll(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> Poll<Self::Output> {
@@ -169,17 +174,12 @@ where
                         .get_extras(&mut ext);
                     ext
                 };
-                let meta: &super::ConnectionMeta = ext.get().unwrap();
+                let data_root = conn.data_root();
                 let (rx, tx) = if Cfg::should_capture(&conn) {
-                    match LimFile::open(meta.data_root.as_fd(), Cfg::RX_PATH, Cfg::RX_MAX_SIZE)
-                        .and_then(|rx| {
-                            let tx = LimFile::open(
-                                meta.data_root.as_fd(),
-                                Cfg::TX_PATH,
-                                Cfg::TX_MAX_SIZE,
-                            )?;
-                            Ok((rx, tx))
-                        }) {
+                    match LimFile::open(data_root, Cfg::RX_PATH, Cfg::RX_MAX_SIZE).and_then(|rx| {
+                        let tx = LimFile::open(data_root, Cfg::TX_PATH, Cfg::TX_MAX_SIZE)?;
+                        Ok((rx, tx))
+                    }) {
                         Ok(v) => v,
                         Err(e) => return Poll::Ready(Err(Error::CreateFile(e))),
                     }
@@ -212,7 +212,7 @@ impl<Cfg, R, S> tower::Service<R> for CaptureConnector<Cfg, S>
 where
     Cfg: Config<S::Response>,
     S: tower_service::Service<R>,
-    S::Response: hyper_util::client::legacy::connect::Connection,
+    S::Response: hyper_util::client::legacy::connect::Connection + ConnectionExt,
 {
     type Error = Error<S::Error>;
     type Future = ConnectFuture<Cfg, S::Future>;

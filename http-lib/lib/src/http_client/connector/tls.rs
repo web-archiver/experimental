@@ -1,9 +1,4 @@
-use std::{
-    future::Future,
-    os::fd::{AsFd, BorrowedFd},
-    sync::Arc,
-    task::Poll,
-};
+use std::{future::Future, os::fd::BorrowedFd, sync::Arc, task::Poll};
 
 use hyper::rt::{Read, Write};
 use hyper_rustls::{HttpsConnector, MaybeHttpsStream};
@@ -15,6 +10,22 @@ use webar_core::{
     codec::gcbor::{self, support::tls::CborDer, ToGCbor},
 };
 use webar_http_lib_core::utils::write_file;
+
+use super::ConnectionExt;
+
+pub struct CaptureMaybeHttpsHandshake;
+impl<T> super::capture::Config<MaybeHttpsStream<T>> for CaptureMaybeHttpsHandshake {
+    const RX_PATH: &'static std::ffi::CStr = c"tls_rx_data.bin";
+    const RX_MAX_SIZE: Option<std::num::NonZeroU64> = std::num::NonZeroU64::new(512 * 1024);
+    const TX_PATH: &'static std::ffi::CStr = c"tls_tx_data.bin";
+    const TX_MAX_SIZE: Option<std::num::NonZeroU64> = std::num::NonZeroU64::new(512 * 1024);
+    fn should_capture(conn: &MaybeHttpsStream<T>) -> bool {
+        match conn {
+            MaybeHttpsStream::Http(_) => false,
+            MaybeHttpsStream::Https(_) => true,
+        }
+    }
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -39,7 +50,7 @@ pub struct ConnectFuture<F>(#[pin] F);
 impl<F, T> Future for ConnectFuture<F>
 where
     F: Future<Output = Result<MaybeHttpsStream<T>, Box<dyn std::error::Error + Send + Sync>>>,
-    T: HyperConnection,
+    T: HyperConnection + super::ConnectionExt,
 {
     type Output = Result<MaybeHttpsStream<T>, Error>;
     fn poll(
@@ -50,19 +61,9 @@ where
             Poll::Pending => Poll::Pending,
             Poll::Ready(Ok(conn @ MaybeHttpsStream::Http(_))) => Poll::Ready(Ok(conn)),
             Poll::Ready(Ok(MaybeHttpsStream::Https(conn))) => {
-                let mut ext = http::Extensions::new();
-                let meta = {
-                    conn.inner()
-                        .get_ref()
-                        .0
-                        .inner()
-                        .connected()
-                        .get_extras(&mut ext);
-                    ext.get::<super::ConnectionMeta>().unwrap()
-                };
                 let tls_conn = conn.inner().get_ref().1;
                 match write_file(
-                    meta.data_root.as_fd(),
+                    conn.inner().get_ref().0.data_root(),
                     c"tls_info.bin",
                     &gcbor::to_vec(&Info {
                         protocol_version: tls_conn.protocol_version().unwrap().into(),
@@ -85,6 +86,28 @@ where
                 }
             }
             Poll::Ready(Err(e)) => Poll::Ready(Err(Error::Inner(e))),
+        }
+    }
+}
+impl<T: ConnectionExt> ConnectionExt for tokio_rustls::client::TlsStream<T> {
+    fn uuid(&self) -> uuid::Uuid {
+        self.get_ref().0.uuid()
+    }
+    fn data_root(&self) -> BorrowedFd<'_> {
+        self.get_ref().0.data_root()
+    }
+}
+impl<T: super::ConnectionExt> super::ConnectionExt for MaybeHttpsStream<T> {
+    fn uuid(&self) -> uuid::Uuid {
+        match self {
+            Self::Http(c) => c.uuid(),
+            Self::Https(c) => c.uuid(),
+        }
+    }
+    fn data_root(&self) -> BorrowedFd<'_> {
+        match self {
+            Self::Http(c) => c.data_root(),
+            Self::Https(c) => c.data_root(),
         }
     }
 }
@@ -112,7 +135,7 @@ impl<T> TlsConnector<T> {
 impl<T> tower_service::Service<http::Uri> for TlsConnector<T>
 where
     T: tower_service::Service<http::Uri>,
-    T::Response: Read + Write + HyperConnection + Send + Unpin + 'static,
+    T::Response: Read + Write + HyperConnection + ConnectionExt + Send + Unpin + 'static,
     T::Future: Send + 'static,
     T::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
 {

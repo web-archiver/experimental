@@ -1,11 +1,22 @@
-use std::{os::fd::OwnedFd, sync::Arc};
+use std::os::fd::BorrowedFd;
 
-pub struct ConnMetaInner {
+#[derive(Clone)]
+pub struct ConnMeta {
     pub(crate) uuid: uuid::Uuid,
-    pub(crate) data_root: OwnedFd,
 }
 
-pub type ConnectionMeta = Arc<ConnMetaInner>;
+trait ConnectionExt {
+    fn uuid(&self) -> uuid::Uuid;
+    fn data_root(&self) -> BorrowedFd<'_>;
+}
+impl<C: ConnectionExt> ConnectionExt for hyper_util::rt::TokioIo<C> {
+    fn uuid(&self) -> uuid::Uuid {
+        self.inner().uuid()
+    }
+    fn data_root(&self) -> BorrowedFd<'_> {
+        self.inner().data_root()
+    }
+}
 
 pub mod capture;
 pub mod tcp;
