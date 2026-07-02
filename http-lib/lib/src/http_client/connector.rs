@@ -7,5 +7,6 @@ pub struct ConnMetaInner {
 
 pub type ConnectionMeta = Arc<ConnMetaInner>;
 
+pub mod capture;
 pub mod tcp;
 pub mod tls;
