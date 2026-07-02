@@ -28,6 +28,7 @@ use crate::{
 
 mod compressible;
 mod connector;
+mod cookie;
 mod object;
 mod record;
 mod timing;

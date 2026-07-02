@@ -147,6 +147,11 @@ impl From<TimingResponse> for http::Response<ResponseBody> {
         )
     }
 }
+impl super::cookie::Response for TimingResponse {
+    fn headers(&self) -> &http::HeaderMap<http::HeaderValue> {
+        &self.parts.headers
+    }
+}
 
 #[derive(Debug)]
 pub struct TimingService<S> {
