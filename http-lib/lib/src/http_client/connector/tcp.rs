@@ -11,10 +11,8 @@ use std::{
     time::{Duration, Instant},
 };
 
-use http::Uri;
 use hyper::rt::{Read, Write};
-use hyper_util::{client::legacy::connect::HttpConnector, rt::TokioIo};
-use tower::Service;
+use hyper_util::rt::TokioIo;
 use uuid::Uuid;
 use webar_core::{
     bytes::Bytes,
@@ -268,9 +266,9 @@ impl PinnedDrop for Connection {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub enum ConnectError {
+pub enum ConnectError<E> {
     #[error("connect error")]
-    Http(#[source] <HttpConnector as Service<Uri>>::Error),
+    Http(#[source] E),
     #[error("failed to get connection info")]
     Info(#[source] std::io::Error),
     #[error("failed to create log files")]
@@ -278,15 +276,18 @@ pub enum ConnectError {
 }
 
 #[pin_project::pin_project]
-pub struct ConnectFuture {
+pub struct ConnectFuture<F> {
     log_root: Arc<OwnedFd>,
     seq: u64,
     start_timestamp: Timestamp,
     #[pin]
-    inner: <HttpConnector as Service<Uri>>::Future,
+    inner: F,
 }
-impl Future for ConnectFuture {
-    type Output = Result<Connection, ConnectError>;
+impl<F, E> Future for ConnectFuture<F>
+where
+    F: Future<Output = Result<TokioIo<tokio::net::TcpStream>, E>>,
+{
+    type Output = Result<Connection, ConnectError<E>>;
     fn poll(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> Poll<Self::Output> {
         let proj = self.project();
         match proj.inner.poll(cx) {
@@ -350,14 +351,17 @@ impl Future for ConnectFuture {
     }
 }
 
-pub struct TcpConnector {
+pub struct TcpConnector<S> {
     log_root: Arc<OwnedFd>,
     seq: u64,
-    inner: HttpConnector,
+    inner: S,
 }
-impl tower_service::Service<http::Uri> for TcpConnector {
-    type Error = ConnectError;
-    type Future = ConnectFuture;
+impl<S> tower_service::Service<http::Uri> for TcpConnector<S>
+where
+    S: tower_service::Service<http::Uri, Response = TokioIo<tokio::net::TcpStream>>,
+{
+    type Error = ConnectError<S::Error>;
+    type Future = ConnectFuture<S::Future>;
     type Response = Connection;
     fn poll_ready(&mut self, cx: &mut std::task::Context<'_>) -> Poll<Result<(), Self::Error>> {
         self.inner.poll_ready(cx).map_err(ConnectError::Http)
