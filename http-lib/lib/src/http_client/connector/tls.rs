@@ -1,7 +1,7 @@
 use std::{future::Future, os::fd::BorrowedFd, sync::Arc, task::Poll};
 
 use hyper::rt::{Read, Write};
-use hyper_rustls::{HttpsConnector, MaybeHttpsStream};
+use hyper_rustls::MaybeHttpsStream;
 use hyper_util::{client::legacy::connect::Connection as HyperConnection, rt::TokioIo};
 use rustix::io::Errno;
 
@@ -112,8 +112,8 @@ impl<T: super::ConnectionExt> super::ConnectionExt for MaybeHttpsStream<T> {
     }
 }
 
-pub struct TlsConnector<T>(HttpsConnector<T>);
-impl<T> TlsConnector<T> {
+pub struct MaybeHttpsConnector<T>(hyper_rustls::HttpsConnector<T>);
+impl<T> MaybeHttpsConnector<T> {
     pub(crate) fn new(root: BorrowedFd<'_>, inner: T) -> Result<Self, rustix::io::Errno> {
         Ok(Self(
             hyper_rustls::HttpsConnectorBuilder::new()
@@ -132,7 +132,7 @@ impl<T> TlsConnector<T> {
         ))
     }
 }
-impl<T> tower_service::Service<http::Uri> for TlsConnector<T>
+impl<T> tower_service::Service<http::Uri> for MaybeHttpsConnector<T>
 where
     T: tower_service::Service<http::Uri>,
     T::Response: Read + Write + HyperConnection + ConnectionExt + Send + Unpin + 'static,
@@ -141,7 +141,9 @@ where
 {
     type Response = MaybeHttpsStream<T::Response>;
     type Error = Error;
-    type Future = ConnectFuture<<HttpsConnector<T> as tower_service::Service<http::Uri>>::Future>;
+    type Future = ConnectFuture<
+        <hyper_rustls::HttpsConnector<T> as tower_service::Service<http::Uri>>::Future,
+    >;
     fn poll_ready(
         &mut self,
         cx: &mut std::task::Context<'_>,

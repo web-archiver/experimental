@@ -356,6 +356,15 @@ pub struct TcpConnector<S> {
     seq: u64,
     inner: S,
 }
+impl<S> TcpConnector<S> {
+    pub(crate) fn new(log_root: OwnedFd, inner: S) -> Self {
+        Self {
+            log_root: Arc::new(log_root),
+            seq: 0,
+            inner,
+        }
+    }
+}
 impl<S> tower_service::Service<http::Uri> for TcpConnector<S>
 where
     S: tower_service::Service<http::Uri, Response = TokioIo<tokio::net::TcpStream>>,
