@@ -28,10 +28,8 @@ use crate::{
 
 mod compressible;
 mod connector;
-mod cookie;
+mod http_service;
 mod object;
-mod record;
-mod timing;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, GCborCodec)]
 #[gcbor(transparent)]

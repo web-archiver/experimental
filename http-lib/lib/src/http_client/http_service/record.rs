@@ -1,7 +1,7 @@
 use std::{
     fmt::Write,
     future::Future,
-    ops::{Deref, DerefMut},
+    ops::DerefMut,
     os::fd::BorrowedFd,
     sync::{Arc, Mutex},
     task::Poll,
@@ -15,7 +15,8 @@ use webar_core::{
 };
 use webar_http_lib_core::{blob::Info as BlobInfo, utils::create_file};
 
-use crate::{blob::BlobStore, http_client::timing};
+use super::timing;
+use crate::{blob::BlobStore, http_client::compressible};
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, GCborCodec)]
 #[gcbor(transparent)]
@@ -129,7 +130,7 @@ impl<F> RecordFuture<F> {
                         // already compressed
                         Some(false)
                     } else {
-                        super::compressible::check(&resp.parts.headers, &resp.data)
+                        compressible::check(&resp.parts.headers, &resp.data)
                     },
                 },
                 &resp.data,
@@ -247,7 +248,7 @@ where
                 }
                 None => BlobInfo {
                     size: b.len() as u64,
-                    is_compressible: super::compressible::check(req.headers(), b),
+                    is_compressible: compressible::check(req.headers(), b),
                 },
             },
             digest: Digest::hash_buf(b),

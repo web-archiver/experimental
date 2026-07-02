@@ -85,52 +85,16 @@ pub enum Error<ER, EB> {
     RecvBody(#[source] EB),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum FrameState {
-    Data,
-    Trailer,
-    Done,
-}
 #[derive(Debug)]
 pub struct ResponseBody {
-    pub data: bytes::Bytes,
+    pub data: Vec<u8>,
     pub trailers: Option<http::HeaderMap>,
-    state: FrameState,
-}
-impl http_body::Body for ResponseBody {
-    type Data = bytes::Bytes;
-    type Error = Infallible;
-    fn poll_frame(
-        mut self: Pin<&mut Self>,
-        _: &mut std::task::Context<'_>,
-    ) -> Poll<Option<Result<http_body::Frame<Self::Data>, Self::Error>>> {
-        match self.state {
-            FrameState::Data => {
-                self.state = if self.trailers.is_some() {
-                    FrameState::Trailer
-                } else {
-                    FrameState::Done
-                };
-                Poll::Ready(Some(Ok(http_body::Frame::data(self.data.clone()))))
-            }
-            FrameState::Trailer => Poll::Ready(Some(Ok(http_body::Frame::trailers(
-                self.trailers.clone().unwrap_or_default(),
-            )))),
-            FrameState::Done => Poll::Ready(None),
-        }
-    }
-    fn size_hint(&self) -> http_body::SizeHint {
-        http_body::SizeHint::with_exact(self.data.len() as u64)
-    }
-    fn is_end_stream(&self) -> bool {
-        self.state == FrameState::Done
-    }
 }
 
 #[derive(Debug)]
 pub struct TimingResponse {
     pub parts: http::response::Parts,
-    pub data: bytes::Bytes,
+    pub data: Vec<u8>,
     pub trailers: Option<http::HeaderMap>,
     pub timing: Timing,
 }
@@ -142,14 +106,19 @@ impl From<TimingResponse> for http::Response<ResponseBody> {
             ResponseBody {
                 data: value.data,
                 trailers: value.trailers,
-                state: FrameState::Data,
             },
         )
     }
 }
-impl super::cookie::Response for TimingResponse {
+impl super::Response for TimingResponse {
     fn headers(&self) -> &http::HeaderMap<http::HeaderValue> {
         &self.parts.headers
+    }
+    fn body(&self) -> &[u8] {
+        &self.data
+    }
+    fn set_body(&mut self, b: Vec<u8>) {
+        self.data = b;
     }
 }
 
@@ -214,10 +183,10 @@ where
                     }
                     None => span.pb_set_style(&SPINNER_STYLE),
                 };
-                let mut body_buf = body.size_hint().upper().map_or_else(
-                    || bytes::BytesMut::new(),
-                    |l| bytes::BytesMut::with_capacity(l as usize),
-                );
+                let mut body_buf = body
+                    .size_hint()
+                    .upper()
+                    .map_or_else(|| Vec::new(), |l| Vec::with_capacity(l as usize));
                 let mut body = std::pin::pin!(body);
                 let mut has_trailers = false;
                 let mut trailers = HeaderMap::new();
@@ -245,7 +214,7 @@ where
 
                 Ok(TimingResponse {
                     parts,
-                    data: body_buf.freeze(),
+                    data: body_buf,
                     trailers: if has_trailers { Some(trailers) } else { None },
                     timing: Timing {
                         start: start_ts,

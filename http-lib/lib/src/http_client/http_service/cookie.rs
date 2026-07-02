@@ -5,10 +5,6 @@ use std::{
     task::Poll,
 };
 
-pub trait Response {
-    fn headers(&self) -> &http::HeaderMap<http::HeaderValue>;
-}
-
 #[derive(Debug, thiserror::Error)]
 enum CookieParseError {
     #[error("header is not utf8: {0}")]
@@ -35,7 +31,7 @@ pub struct CookieFuture<F> {
 impl<F, R, E> Future for CookieFuture<F>
 where
     F: Future<Output = Result<R, E>>,
-    R: Response,
+    R: super::Response,
 {
     type Output = Result<R, E>;
     fn poll(
@@ -124,7 +120,7 @@ impl<S, B, R> tower::Service<http::Request<B>> for CookieService<S>
 where
     S: tower::Service<http::Request<B>>,
     S::Future: Future<Output = Result<R, S::Error>>,
-    R: Response,
+    R: super::Response,
 {
     type Response = R;
     type Error = S::Error;
