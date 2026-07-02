@@ -41,6 +41,11 @@ fn from_header_map<'a>(mp: &'a reqwest::header::HeaderMap) -> HeaderMap<'a> {
     ret
 }
 
+#[derive(ToGCbor)]
+struct Connection {
+    uuid: uuid::Uuid,
+}
+
 #[derive(ToGCbor, valuable::Valuable)]
 struct Request<'a> {
     #[valuable(skip)]
@@ -66,6 +71,7 @@ struct Response<'a> {
 #[derive(ToGCbor)]
 struct Message<'a, Req, Resp> {
     id: MessageId,
+    connection: Connection,
     timing: &'a super::timing::Timing,
     request: Req,
     response: Resp,
@@ -131,6 +137,14 @@ impl<F> RecordFuture<F> {
             .map_err(Error::BlobStore)?;
         let msg = Message {
             id: MessageId(self.id),
+            connection: Connection {
+                uuid: resp
+                    .parts
+                    .extensions
+                    .get::<crate::http_client::connector::ConnMeta>()
+                    .unwrap()
+                    .uuid,
+            },
             timing: &resp.timing,
             request: &self.request,
             response: Response {
