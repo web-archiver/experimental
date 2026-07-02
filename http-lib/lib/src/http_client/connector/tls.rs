@@ -2,7 +2,7 @@ use std::{future::Future, os::fd::BorrowedFd, sync::Arc, task::Poll};
 
 use hyper::rt::{Read, Write};
 use hyper_rustls::{HttpsConnector, MaybeHttpsStream};
-use hyper_util::client::legacy::connect::Connection as HyperConnection;
+use hyper_util::{client::legacy::connect::Connection as HyperConnection, rt::TokioIo};
 use rustix::io::Errno;
 
 use webar_core::{
@@ -150,5 +150,49 @@ where
     }
     fn call(&mut self, req: http::Uri) -> Self::Future {
         ConnectFuture(self.0.call(req))
+    }
+}
+
+pub type HttpsOnlyStream<T> = TokioIo<tokio_rustls::client::TlsStream<TokioIo<T>>>;
+
+#[derive(Debug, thiserror::Error)]
+pub enum HttpsOnlyError<E> {
+    #[error("{0}")]
+    Inner(#[source] E),
+    #[error("expect https connection")]
+    HttpsOnly,
+}
+#[pin_project::pin_project]
+pub struct HttpsOnlyFuture<F>(#[pin] F);
+impl<F, T, E> Future for HttpsOnlyFuture<F>
+where
+    F: Future<Output = Result<MaybeHttpsStream<T>, E>>,
+{
+    type Output = Result<HttpsOnlyStream<T>, HttpsOnlyError<E>>;
+    fn poll(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> Poll<Self::Output> {
+        match self.project().0.poll(cx) {
+            Poll::Pending => Poll::Pending,
+            Poll::Ready(Ok(MaybeHttpsStream::Https(c))) => Poll::Ready(Ok(c)),
+            Poll::Ready(Ok(MaybeHttpsStream::Http(_))) => {
+                Poll::Ready(Err(HttpsOnlyError::HttpsOnly))
+            }
+            Poll::Ready(Err(e)) => Poll::Ready(Err(HttpsOnlyError::Inner(e))),
+        }
+    }
+}
+
+pub struct HttpsOnlyConnector<S>(pub(crate) S);
+impl<S, T> tower_service::Service<http::Uri> for HttpsOnlyConnector<S>
+where
+    S: tower_service::Service<http::Uri, Response = MaybeHttpsStream<T>>,
+{
+    type Response = HttpsOnlyStream<T>;
+    type Error = HttpsOnlyError<S::Error>;
+    type Future = HttpsOnlyFuture<S::Future>;
+    fn poll_ready(&mut self, cx: &mut std::task::Context<'_>) -> Poll<Result<(), Self::Error>> {
+        self.0.poll_ready(cx).map_err(HttpsOnlyError::Inner)
+    }
+    fn call(&mut self, req: http::Uri) -> Self::Future {
+        HttpsOnlyFuture(self.0.call(req))
     }
 }
