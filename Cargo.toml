@@ -5,7 +5,7 @@ members = [
   "core/rs-macros",
   "core/rs",
   "http-lib/lib",
-  "http-lib/core",
+  "http-lib/core", "http-lib/target-info",
 ]
 
 

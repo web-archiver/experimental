@@ -8,7 +8,12 @@ license.workspace = true
 anyhow.workspace = true
 const-hex.workspace = true
 tar.workspace = true
-rustix = { workspace = true, features = ["runtime", "process", "thread"] }
+rustix = { workspace = true, features = [
+  "runtime",
+  "process",
+  "thread",
+  "system",
+] }
 rustls = "0.23.21"
 webpki-roots = "1.0.7"
 # logging
@@ -57,3 +62,4 @@ tokio-rustls = "0.26.4"
 brotli = "8.0.4"
 flate2 = "1.1.9"
 zstd = "0.13.3"
+webar-target-info = { version = "0.1.0", path = "../target-info" }

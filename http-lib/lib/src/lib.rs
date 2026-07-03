@@ -4,7 +4,7 @@ use std::{os::fd::BorrowedFd, process::ExitCode, sync::Arc};
 
 use anyhow::{Context, Result};
 use webar_core::{
-    codec::gcbor::GCborCodec,
+    codec::gcbor::{GCborCodec, ToGCbor},
     time::{TimePeriod, Timestamp},
 };
 
@@ -18,10 +18,27 @@ mod traffic;
 const DATA_FILE: webar_http_lib_core::FilePath =
     webar_http_lib_core::FilePath::new_throw(c"data.tar");
 
-#[derive(GCborCodec)]
-struct FetchMeta {
+#[derive(ToGCbor)]
+struct Uname<'a> {
+    sysname: &'a str,
+    nodename: &'a str,
+    release: &'a str,
+    version: &'a str,
+    machine: &'a str,
+    domainname: &'a str,
+}
+
+#[derive(ToGCbor)]
+struct SystemInfo<'a> {
+    uname: Uname<'a>,
+    build_target: &'static webar_target_info::BuildTarget,
+}
+
+#[derive(ToGCbor)]
+struct FetchMeta<'a> {
     uuid: uuid::Uuid,
     time: TimePeriod,
+    system: SystemInfo<'a>,
 }
 
 fn run(
@@ -35,6 +52,26 @@ fn run(
         Arc::new(blob::BlobStore::new(root, shared_index).context("failed to create blob store")?);
     let http_client = http_client::Client::new(root, Arc::clone(&blob_store))
         .context("failed to init http client")?;
+    let un = rustix::system::uname();
+    let uname_str = un
+        .sysname()
+        .to_str()
+        .and_then(|sysname| {
+            let nodename = un.nodename().to_str()?;
+            let release = un.release().to_str()?;
+            let version = un.version().to_str()?;
+            let machine = un.machine().to_str()?;
+            let domainname = un.domainname().to_str()?;
+            Ok(Uname {
+                sysname,
+                nodename,
+                release,
+                version,
+                machine,
+                domainname,
+            })
+        })
+        .context("invalid utf8 character in uname")?;
 
     Arc::into_inner(blob_store)
         .expect("program returned with unfinished thread")

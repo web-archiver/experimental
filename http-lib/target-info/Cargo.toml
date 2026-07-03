@@ -1,0 +1,11 @@
+[package]
+name = "webar-target-info"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+
+[dependencies]
+webar-core.workspace = true
+
+[build-dependencies]
+build-rs = "0.3.4"
