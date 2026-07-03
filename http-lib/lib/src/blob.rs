@@ -1,4 +1,5 @@
 use std::{
+    ops::Deref,
     os::fd::{AsFd, BorrowedFd, OwnedFd},
     sync::Mutex,
 };
@@ -207,12 +208,15 @@ impl BlobStore {
         Ok(file.digest)
     }
 
-    pub(crate) fn finish(self) -> Result<()> {
+    pub(crate) fn save(&self) -> Result<()> {
         write_fd(
             self.incremental_info_fd.as_fd(),
-            &gcbor::to_vec(&self.incremental_info.into_inner().unwrap()),
+            &gcbor::to_vec(self.incremental_info.lock().unwrap().deref()),
         )
-        .context("failed to write incremental info file")?;
+        .context("failed to write incremental info file")
+    }
+    pub(crate) fn finish(self) -> Result<()> {
+        self.save()?;
 
         self.store
             .set_readonly()

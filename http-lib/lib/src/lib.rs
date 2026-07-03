@@ -73,10 +73,7 @@ fn run(
         })
         .context("invalid utf8 character in uname")?;
 
-    Arc::into_inner(blob_store)
-        .expect("program returned with unfinished thread")
-        .finish()
-        .context("failed to finish blob store")?;
+    blob_store.save().context("failed to finish blob store")?;
     todo!()
 }
 
