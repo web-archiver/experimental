@@ -69,6 +69,11 @@ where
 }
 
 pub struct Decompress<S>(S);
+impl<S> Decompress<S> {
+    pub(crate) fn new(inner: S) -> Self {
+        Self(inner)
+    }
+}
 impl<S, B> Service<http::Request<B>> for Decompress<S>
 where
     S: Service<http::Request<B>>,

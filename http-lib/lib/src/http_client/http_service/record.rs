@@ -215,9 +215,9 @@ impl<S> RecordService<S> {
         })
     }
 }
-impl<S> tower::Service<http::Request<Option<bytes::Bytes>>> for RecordService<S>
+impl<S> tower::Service<http::Request<super::ReqBody>> for RecordService<S>
 where
-    S: tower::Service<http::Request<Option<bytes::Bytes>>>,
+    S: tower::Service<http::Request<super::ReqBody>>,
     S::Future: Future<Output = Result<timing::TimingResponse, S::Error>>,
 {
     type Response = timing::TimingResponse;
@@ -229,7 +229,7 @@ where
     ) -> std::task::Poll<Result<(), Self::Error>> {
         self.inner.poll_ready(cx).map_err(Error::Inner)
     }
-    fn call(&mut self, mut req: http::Request<Option<bytes::Bytes>>) -> Self::Future {
+    fn call(&mut self, mut req: http::Request<super::ReqBody>) -> Self::Future {
         let id = uuid::Uuid::new_v4();
         let mut buf = [0; uuid::fmt::Hyphenated::LENGTH];
 
@@ -240,7 +240,7 @@ where
 
         self.uri_buf.clear();
         let _ = write!(&mut self.uri_buf, "{}", req.uri());
-        let request_body = req.body().as_ref().map(|b| RequestBody {
+        let request_body = req.body().0.as_ref().map(|b| RequestBody {
             info: match req.extensions().get::<BlobInfo>() {
                 Some(v) => {
                     assert_eq!(v.size, b.len() as u64);

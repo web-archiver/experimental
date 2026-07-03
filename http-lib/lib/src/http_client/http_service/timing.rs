@@ -131,7 +131,7 @@ impl<S> TimingService<S> {
         Self { inner }
     }
 }
-impl<B, S> tower_service::Service<Request<bytes::Bytes>> for TimingService<S>
+impl<B, S> tower_service::Service<Request<super::ReqBody>> for TimingService<S>
 where
     S: tower_service::Service<Request<TimedBody>, Response = Response<B>>,
     S::Future: Send + Sync + 'static,
@@ -148,7 +148,7 @@ where
     ) -> std::task::Poll<Result<(), Self::Error>> {
         self.inner.poll_ready(cx).map_err(Error::Request)
     }
-    fn call(&mut self, req: Request<bytes::Bytes>) -> Self::Future {
+    fn call(&mut self, req: Request<super::ReqBody>) -> Self::Future {
         let span = tracing::info_span!("message_timing", indicatif.pb_show = tracing::field::Empty);
 
         let sent_header = Arc::new(OnceLock::new());
@@ -164,7 +164,7 @@ where
                 TimedBody {
                     sent_header: Arc::clone(&sent_header),
                     sent_body: Arc::clone(&sent_body),
-                    data: Some(body),
+                    data: Some(body.0.unwrap_or_default()),
                 },
             )
         });
