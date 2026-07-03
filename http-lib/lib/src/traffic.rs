@@ -1,5 +1,5 @@
 use std::{
-    os::unix::process::CommandExt,
+    os::{fd::AsRawFd, unix::process::CommandExt},
     process::{exit, Command, ExitCode, Stdio},
     thread::sleep,
     time::Duration,
@@ -9,11 +9,14 @@ use anyhow::{Context, Result};
 use rustix::{
     fd::{AsFd, BorrowedFd},
     fs::{self, AtFlags, Mode, OFlags},
-    process::{kill_process, umask, waitpid, Pid, WaitOptions},
+    process::{kill_process, waitpid, Pid, WaitOptions},
     runtime::{kernel_fork, Fork},
 };
 
-use webar_http_lib_core::fetch::{WIRESHARK_DATA_FILE, WIRESHARK_LOG_FILE};
+use webar_http_lib_core::{
+    fetch::{WIRESHARK_DATA_FILE, WIRESHARK_LOG_FILE},
+    utils::{create_dir, create_file},
+};
 
 /// duration waited for dumpcap before start child
 const BEFORE_START: Duration = Duration::from_millis(1000);
@@ -51,12 +54,42 @@ unsafe fn run<E: std::fmt::Debug>(
 ) -> Result<ExitCode> {
     std::fs::create_dir_all(root_path).context("failed to create root dir")?;
 
+    let root = fs::open(
+        root_path,
+        OFlags::PATH | OFlags::DIRECTORY | OFlags::CLOEXEC,
+        Mode::empty(),
+    )
+    .context("failed to open root dir")?;
+    create_dir(root.as_fd(), c"dumpcap").context("failed to create dumpcap dir")?;
+
+    let status = Command::new("dumpcap")
+        .arg("--version")
+        .stdin(Stdio::null())
+        .stdout(
+            create_file(root.as_fd(), c"dumpcap/version.txt")
+                .context("failed to create dumpcap version file")?,
+        )
+        .pre_exec({
+            let root = root.as_raw_fd();
+            move || {
+                rustix::process::fchdir(BorrowedFd::borrow_raw(root))?;
+                Ok(())
+            }
+        })
+        .status()
+        .context("failed to run dumpcap")?;
+    if !status.success() {
+        anyhow::bail!("failed to get dumpcap version: dumpcap returned {status:?}")
+    }
+
     let dumpcap = Pid::from_child(
         &Command::new("dumpcap")
-            .current_dir(root_path)
-            .pre_exec(|| {
-                umask(Mode::WUSR | Mode::WGRP | Mode::WOTH);
-                Ok(())
+            .pre_exec({
+                let root = root.as_raw_fd();
+                move || {
+                    rustix::process::fchdir(BorrowedFd::borrow_raw(root))?;
+                    Ok(())
+                }
             })
             .args(DUMPCAP_ARGS)
             .stdin(Stdio::null())
@@ -77,13 +110,6 @@ unsafe fn run<E: std::fmt::Debug>(
             anyhow::bail!("dumpcap exited with status {s}");
         }
     }
-
-    let root = fs::open(
-        root_path,
-        OFlags::PATH | OFlags::DIRECTORY | OFlags::CLOEXEC,
-        Mode::empty(),
-    )
-    .context("failed to open root dir")?;
 
     let child = match kernel_fork().context("failed to start child")? {
         Fork::Child(_) => match f(root.as_fd()) {
