@@ -93,10 +93,10 @@ pub struct ResponseBody {
 
 #[derive(Debug)]
 pub struct TimingResponse {
-    pub parts: http::response::Parts,
-    pub data: Vec<u8>,
-    pub trailers: Option<http::HeaderMap>,
-    pub timing: Timing,
+    pub(crate) parts: http::response::Parts,
+    pub(crate) data: Vec<u8>,
+    pub(crate) trailers: Option<http::HeaderMap>,
+    pub(crate) timing: Timing,
 }
 impl From<TimingResponse> for http::Response<ResponseBody> {
     fn from(mut value: TimingResponse) -> Self {
@@ -122,7 +122,7 @@ impl super::Response for TimingResponse {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TimingService<S> {
     inner: S,
 }

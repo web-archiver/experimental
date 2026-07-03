@@ -8,6 +8,7 @@ pub struct ConnMeta {
     pub(crate) uuid: uuid::Uuid,
 }
 
+#[allow(dead_code)]
 trait ConnectionExt {
     fn uuid(&self) -> uuid::Uuid;
     fn data_root(&self) -> BorrowedFd<'_>;

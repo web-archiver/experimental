@@ -52,8 +52,10 @@ type DefaultInner<C> = cookie::CookieService<
         >,
     >,
 >;
-type ClientReq = http::Request<ReqBody>;
+pub(crate) type DefaultReq = http::Request<ReqBody>;
+pub(crate) type DefaultResponse = record::RecordResponse<timing::TimingResponse>;
 
+#[derive(Clone)]
 pub struct DefaultService<C>(DefaultInner<C>);
 impl<C> DefaultService<C> {
     pub(crate) fn new(
@@ -77,20 +79,20 @@ impl<C> DefaultService<C> {
         )))
     }
 }
-impl<C> Service<ClientReq> for DefaultService<C>
+impl<C> Service<DefaultReq> for DefaultService<C>
 where
     C: hyper_util::client::legacy::connect::Connect + Clone + Send + Sync + 'static,
 {
-    type Response = <DefaultInner<C> as Service<ClientReq>>::Response;
-    type Error = <DefaultInner<C> as Service<ClientReq>>::Error;
-    type Future = <DefaultInner<C> as Service<ClientReq>>::Future;
+    type Response = <DefaultInner<C> as Service<DefaultReq>>::Response;
+    type Error = <DefaultInner<C> as Service<DefaultReq>>::Error;
+    type Future = <DefaultInner<C> as Service<DefaultReq>>::Future;
     fn poll_ready(
         &mut self,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Result<(), Self::Error>> {
         self.0.poll_ready(cx)
     }
-    fn call(&mut self, req: ClientReq) -> Self::Future {
+    fn call(&mut self, req: DefaultReq) -> Self::Future {
         self.0.call(req)
     }
 }

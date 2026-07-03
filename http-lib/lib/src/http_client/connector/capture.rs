@@ -168,12 +168,6 @@ where
         match self.project().inner.poll(cx) {
             Poll::Pending => Poll::Pending,
             Poll::Ready(Ok(conn)) => {
-                let ext = {
-                    let mut ext = http::Extensions::new();
-                    hyper_util::client::legacy::connect::Connection::connected(&conn)
-                        .get_extras(&mut ext);
-                    ext
-                };
                 let data_root = conn.data_root();
                 let (rx, tx) = if Cfg::should_capture(&conn) {
                     match LimFile::open(data_root, Cfg::RX_PATH, Cfg::RX_MAX_SIZE).and_then(|rx| {

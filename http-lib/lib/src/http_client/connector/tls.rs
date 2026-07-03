@@ -185,6 +185,7 @@ where
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct HttpsOnlyConnector<S>(pub(crate) S);
 impl<S, T> tower_service::Service<http::Uri> for HttpsOnlyConnector<S>

@@ -68,6 +68,7 @@ where
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct Decompress<S>(S);
 impl<S> Decompress<S> {
     pub(crate) fn new(inner: S) -> Self {

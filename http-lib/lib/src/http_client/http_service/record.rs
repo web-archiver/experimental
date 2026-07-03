@@ -30,7 +30,7 @@ enum RequestId {
 
 type HeaderMap<'a> = GCborMap<&'a str, Vec<support::http::HeaderValue<'a>>>;
 
-fn from_header_map<'a>(mp: &'a reqwest::header::HeaderMap) -> HeaderMap<'a> {
+fn from_header_map<'a>(mp: &'a http::header::HeaderMap) -> HeaderMap<'a> {
     let mut ret: HeaderMap<'a> = GCborMap::new();
     for (k, v) in mp.iter() {
         let val = match v.to_str() {
@@ -99,6 +99,22 @@ struct RequestBody {
     digest: Digest,
     data: Bytes,
 }
+pub struct RecordResponse<R> {
+    pub(crate) message_id: MessageId,
+    pub(crate) inner: R,
+}
+impl<R: super::Response> super::Response for RecordResponse<R> {
+    fn headers(&self) -> &http::HeaderMap<http::HeaderValue> {
+        self.inner.headers()
+    }
+    fn body(&self) -> &[u8] {
+        self.inner.body()
+    }
+    fn set_body(&mut self, b: Vec<u8>) {
+        self.inner.set_body(b);
+    }
+}
+
 #[pin_project::pin_project]
 pub struct RecordFuture<F> {
     id: uuid::Uuid,
@@ -172,18 +188,18 @@ impl<F, E> Future for RecordFuture<F>
 where
     F: Future<Output = Result<timing::TimingResponse, E>>,
 {
-    type Output = Result<timing::TimingResponse, Error<E>>;
+    type Output = Result<RecordResponse<timing::TimingResponse>, Error<E>>;
     fn poll(
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Self::Output> {
         match self.as_mut().project().fut.poll(cx) {
             Poll::Pending => Poll::Pending,
-            Poll::Ready(Ok(mut r)) => match self.record_info(&r) {
-                Ok(()) => {
-                    r.parts.extensions.insert(MessageId(self.id));
-                    Poll::Ready(Ok(r))
-                }
+            Poll::Ready(Ok(r)) => match self.record_info(&r) {
+                Ok(()) => Poll::Ready(Ok(RecordResponse {
+                    message_id: MessageId(self.id),
+                    inner: r,
+                })),
                 Err(e) => Poll::Ready(Err(e)),
             },
             Poll::Ready(Err(e)) => Poll::Ready(Err(Error::Inner(e))),
@@ -191,6 +207,7 @@ where
     }
 }
 
+#[derive(Clone)]
 pub struct RecordService<S> {
     uri_buf: String,
     blob_store: Arc<BlobStore>,
@@ -220,7 +237,7 @@ where
     S: tower::Service<http::Request<super::ReqBody>>,
     S::Future: Future<Output = Result<timing::TimingResponse, S::Error>>,
 {
-    type Response = timing::TimingResponse;
+    type Response = RecordResponse<timing::TimingResponse>;
     type Error = Error<S::Error>;
     type Future = RecordFuture<S::Future>;
     fn poll_ready(

@@ -72,7 +72,7 @@ enum SetReqHeaderError {
     #[error("invalid request header: {0}")]
     InvalidReqHeader(#[source] http::header::InvalidHeaderValue),
 }
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CookieService<S> {
     store: Arc<RwLock<cookie_store::CookieStore>>,
     uri_buf: String,

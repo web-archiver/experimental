@@ -29,17 +29,13 @@ fn run(
     start_time: Timestamp,
     uuid: uuid::Uuid,
     shared_index: &str,
-    cfg: impl FnOnce(reqwest::ClientBuilder) -> reqwest::ClientBuilder,
     main: impl FnOnce(tokio::runtime::Handle, &http_client::Client) -> anyhow::Result<()>,
 ) -> Result<()> {
     let blob_store =
         Arc::new(blob::BlobStore::new(root, shared_index).context("failed to create blob store")?);
-    let http_client = http_client::Client::new(root, Arc::clone(&blob_store), cfg)
+    let http_client = http_client::Client::new(root, Arc::clone(&blob_store))
         .context("failed to init http client")?;
 
-    http_client
-        .finish()
-        .context("failed to finalize http client")?;
     Arc::into_inner(blob_store)
         .expect("program returned with unfinished thread")
         .finish()
@@ -50,7 +46,6 @@ fn run(
 pub fn run_fetcher(
     parent: &str,
     shared_index: &str,
-    cfg: impl FnOnce(reqwest::ClientBuilder) -> reqwest::ClientBuilder,
     main: impl FnOnce(tokio::runtime::Handle, &http_client::Client) -> anyhow::Result<()>,
 ) -> ExitCode {
     let start_time = Timestamp::now();
@@ -67,7 +62,7 @@ pub fn run_fetcher(
             }
             tracing::info!(path = &root_path, "data will be saved to {root_path}");
             tls::global_init();
-            match run(root, start_time, uuid, shared_index, cfg, main) {
+            match run(root, start_time, uuid, shared_index, main) {
                 Ok(()) => Ok(()),
                 Err(e) => {
                     tracing::error!(err = e.as_ref() as &dyn std::error::Error, "error: {e:?}");
