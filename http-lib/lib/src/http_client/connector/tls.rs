@@ -13,6 +13,7 @@ use webar_http_lib_core::utils::write_file;
 
 use super::ConnectionExt;
 
+#[derive(Debug, Clone)]
 pub struct CaptureMaybeHttpsHandshake;
 impl<T> super::capture::Config<MaybeHttpsStream<T>> for CaptureMaybeHttpsHandshake {
     const RX_PATH: &'static std::ffi::CStr = c"tls_rx_data.bin";
@@ -112,6 +113,7 @@ impl<T: super::ConnectionExt> super::ConnectionExt for MaybeHttpsStream<T> {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct MaybeHttpsConnector<T>(hyper_rustls::HttpsConnector<T>);
 impl<T> MaybeHttpsConnector<T> {
     pub(crate) fn new(root: BorrowedFd<'_>, inner: T) -> Result<Self, rustix::io::Errno> {
@@ -183,6 +185,7 @@ where
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct HttpsOnlyConnector<S>(pub(crate) S);
 impl<S, T> tower_service::Service<http::Uri> for HttpsOnlyConnector<S>
 where

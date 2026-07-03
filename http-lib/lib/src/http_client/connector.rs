@@ -34,6 +34,8 @@ type DefaultInner = capture::CaptureConnector<
         >,
     >,
 >;
+
+#[derive(Debug, Clone)]
 pub struct DefaultConnector(DefaultInner);
 impl DefaultConnector {
     pub(crate) fn new(root: BorrowedFd<'_>) -> Result<Self, rustix::io::Errno> {

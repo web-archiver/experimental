@@ -23,6 +23,7 @@ use webar_http_lib_core::utils::{create_file, open_new_dir, write_file};
 
 const STATUS_DURATION: Duration = Duration::from_millis(128);
 
+#[derive(Debug, Clone)]
 pub struct CaptureHandshake;
 impl super::capture::Config<Connection> for CaptureHandshake {
     const RX_MAX_SIZE: Option<std::num::NonZeroU64> = std::num::NonZeroU64::new(512 * 1024);
@@ -351,6 +352,7 @@ where
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct TcpConnector<S> {
     log_root: Arc<OwnedFd>,
     seq: u64,

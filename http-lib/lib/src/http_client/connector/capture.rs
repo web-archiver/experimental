@@ -194,7 +194,7 @@ where
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CaptureConnector<Cfg, S> {
     inner: S,
     _cfg: PhantomData<Cfg>,
