@@ -1,4 +1,4 @@
-use rusqlite::{Connection, Result, ToSql};
+use rusqlite::{Connection, OpenFlags, Result, ToSql};
 
 pub struct Entry<'a> {
     pub server: &'a str,
@@ -51,6 +51,15 @@ impl Index {
             ),
         ))?;
         Ok(Self(conn))
+    }
+    pub fn open_ro(path: &str) -> Result<Self> {
+        Ok(Self(rusqlite::Connection::open_with_flags(
+            path,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )?))
+    }
+    pub fn exists(&self, entry: &Entry<'_>) -> Result<bool> {
+        self.0.prepare_cached(EXISTS_SQL)?.exists(entry.to_params())
     }
     pub fn open(path: &str) -> Result<Self> {
         Ok(Self(rusqlite::Connection::open(path)?))

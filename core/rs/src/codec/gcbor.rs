@@ -199,6 +199,7 @@ impl std::fmt::Debug for ValueBuf {
         f.write_str("ValueBuf")
     }
 }
+
 #[derive(PartialEq, Eq)]
 pub struct ValueSlice<'a, T: ?Sized>(&'a [u8], PhantomData<T>);
 impl ValueBuf {
@@ -214,6 +215,11 @@ impl ValueBuf {
             Err(e) => match e.0 {},
         };
         ValueSlice(&self.0 .0, PhantomData)
+    }
+}
+impl Clone for ValueBuf {
+    fn clone(&self) -> Self {
+        Self::new()
     }
 }
 impl Default for ValueBuf {

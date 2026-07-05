@@ -11,7 +11,7 @@ use webar_core::{
 pub mod blob;
 pub mod http_client;
 pub mod log;
-mod tar_sink;
+pub mod object_store;
 mod tls;
 mod traffic;
 
