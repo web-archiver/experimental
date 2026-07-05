@@ -22,7 +22,7 @@ impl<'a> valuable::Valuable for HeaderValue<'a> {
     fn as_value(&self) -> valuable::Value<'_> {
         match self {
             Self::Bytes(bs) => bs.as_value(),
-            Self::String(s) => valuable::Value::String(*s),
+            Self::String(s) => valuable::Value::String(s),
         }
     }
     fn visit(&self, visit: &mut dyn valuable::Visit) {

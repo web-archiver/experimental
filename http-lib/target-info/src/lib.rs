@@ -14,4 +14,4 @@ pub struct BuildTarget {
 }
 include!(concat!(env!("OUT_DIR"), "/target.rs"));
 
-pub static BUILD_TARGET: &'static BuildTarget = &TARGET;
+pub static BUILD_TARGET: &BuildTarget = &TARGET;

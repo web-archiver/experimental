@@ -186,7 +186,7 @@ where
                 let mut body_buf = body
                     .size_hint()
                     .upper()
-                    .map_or_else(|| Vec::new(), |l| Vec::with_capacity(l as usize));
+                    .map_or_else(Vec::new, |l| Vec::with_capacity(l as usize));
                 let mut body = std::pin::pin!(body);
                 let mut has_trailers = false;
                 let mut trailers = HeaderMap::new();

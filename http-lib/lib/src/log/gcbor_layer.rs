@@ -331,6 +331,6 @@ impl GCborLayer {
         let mut inner = self.0.lock().unwrap();
         let inner = inner.deref_mut();
         let obj = inner.0.encode(&entry);
-        inner.1.write_all(&obj.as_ref()).unwrap()
+        inner.1.write_all(obj.as_ref()).unwrap()
     }
 }

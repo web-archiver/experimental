@@ -263,7 +263,7 @@ mod array {
         }
     }
 
-    mod array {
+    mod fixed_array {
         use crate::test_success;
 
         #[test]

@@ -275,7 +275,7 @@ where
             id: RequestId::XRequestId(id),
             method: req.method().as_str(),
             url: &self.uri_buf,
-            headers: from_header_map(&req.headers()),
+            headers: from_header_map(req.headers()),
             body: request_body.as_ref().map(|b| &b.digest),
             trailers: None,
         };

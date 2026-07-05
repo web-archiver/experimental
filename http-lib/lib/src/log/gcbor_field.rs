@@ -7,12 +7,12 @@ use webar_core::codec::gcbor::{
     EncodedVal, ToGCbor, ValueBuf, ValueSlice,
 };
 
-pub(super) const TY_NAME: &'static str = "webar::tracing::gcbor_field";
+pub(super) const TY_NAME: &str = "webar::tracing::gcbor_field";
 
-const F_TYPE_NAME: &'static str = "type_name";
-const F_VALUE: &'static str = "value";
-const F_DATA_PTR: &'static str = "data_ptr";
-const F_DATA_LEN: &'static str = "data_len";
+const F_TYPE_NAME: &str = "type_name";
+const F_VALUE: &str = "value";
+const F_DATA_PTR: &str = "data_ptr";
+const F_DATA_LEN: &str = "data_len";
 
 const FIELDS: &[valuable::NamedField<'static>] = {
     use valuable::NamedField;

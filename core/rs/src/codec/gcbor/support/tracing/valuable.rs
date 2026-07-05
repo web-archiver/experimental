@@ -67,7 +67,7 @@ impl<'a> Iterator for EncIter<'a> {
                 match ll.cmp(&lr) {
                     Ordering::Less => {
                         let (ret_r, rest_r) = hd_r.split_at(lr);
-                        let ret = EncSlice::Value(hd_l, &ret_r);
+                        let ret = EncSlice::Value(hd_l, ret_r);
                         match iter_l.next() {
                             Some(new_l) => {
                                 *hd_l = new_l.as_slice();
@@ -209,7 +209,7 @@ impl Ord for EncValue {
                 },
             }
         }
-        return Ordering::Equal;
+        Ordering::Equal
     }
 }
 
@@ -252,7 +252,7 @@ impl valuable::Visit for ArrayVisitor {
         where
             Wrapper<T>: ToGCbor,
         {
-            encode_slice::<Wrapper<T>>(unsafe { transmute(vs) })
+            encode_slice::<Wrapper<T>>(unsafe { transmute::<&[T], &[Wrapper<T>]>(vs) })
         }
         let (count, body) = match slice {
             valuable::Slice::Bool(vs) => encode_slice(vs),

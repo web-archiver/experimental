@@ -1,12 +1,6 @@
-use std::{
-    fs::File,
-    io::Write,
-    os::fd::BorrowedFd,
-    sync::{Arc, Mutex},
-};
+use std::{fs::File, io::Write, os::fd::BorrowedFd, sync::Mutex};
 
-use anyhow::Context;
-use rustls::{ClientConfig, KeyLog};
+use rustls::KeyLog;
 
 use webar_core::codec::gcbor::{ToGCbor, ValueBuf};
 
@@ -81,15 +75,4 @@ pub fn global_init() {
     rustls::crypto::aws_lc_rs::default_provider()
         .install_default()
         .unwrap()
-}
-pub fn new_client_cfg(root: BorrowedFd) -> Result<ClientConfig, rustix::io::Errno> {
-    let mut ret = ClientConfig::builder()
-        .with_root_certificates(Arc::new(rustls::RootCertStore {
-            roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
-        }))
-        .with_no_client_auth();
-    ret.enable_sni = true;
-    ret.alpn_protocols = Vec::from([b"http/1.1".to_vec(), b"h2".to_vec()]);
-    ret.key_log = Arc::new(FileKeyLog::new(root)?);
-    Ok(ret)
 }

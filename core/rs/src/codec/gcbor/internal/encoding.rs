@@ -259,7 +259,7 @@ impl<I: ToGCbor> ToGCbor for Vec<I> {
     }
 }
 
-impl<'b, T: ?Sized + ToGCbor> ToGCbor for &'b T {
+impl<T: ?Sized + ToGCbor> ToGCbor for &T {
     fn encode<W: Write>(&self, encoder: Encoder<W>) -> Result<(), Error<W::Error>> {
         T::encode(*self, encoder)
     }
@@ -282,7 +282,7 @@ impl ToGCbor for Ipv4Addr {
     fn encode<W: Write>(&self, encoder: Encoder<W>) -> Result<(), Error<W::Error>> {
         encoder.0.push(Header::Tag(IPV4_TAG))?;
         let bs = self.octets();
-        encoder.0.push(Header::Bytes(Some(bs.len() as usize)))?;
+        encoder.0.push(Header::Bytes(Some(bs.len())))?;
         encoder.0.write_all(&bs).map_err(Error)
     }
 }
@@ -290,7 +290,7 @@ impl ToGCbor for Ipv6Addr {
     fn encode<W: Write>(&self, encoder: Encoder<W>) -> Result<(), Error<W::Error>> {
         encoder.0.push(Header::Tag(IPV6_TAG))?;
         let bs = self.octets();
-        encoder.0.push(Header::Bytes(Some(bs.len() as usize)))?;
+        encoder.0.push(Header::Bytes(Some(bs.len())))?;
         encoder.0.write_all(&bs).map_err(Error)
     }
 }

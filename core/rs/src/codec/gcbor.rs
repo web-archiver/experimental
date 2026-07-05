@@ -79,7 +79,7 @@ impl<V: valuable::Valuable> valuable::Valuable for Key<V> {
     where
         Self: Sized,
     {
-        V::visit_slice(unsafe { transmute(slice) }, visit);
+        V::visit_slice(unsafe { transmute::<&[Key<V>], &[V]>(slice) }, visit);
     }
 }
 
@@ -214,6 +214,11 @@ impl ValueBuf {
             Err(e) => match e.0 {},
         };
         ValueSlice(&self.0 .0, PhantomData)
+    }
+}
+impl Default for ValueBuf {
+    fn default() -> Self {
+        Self::new()
     }
 }
 impl<'a, T: ?Sized> ValueSlice<'a, T> {

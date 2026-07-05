@@ -98,7 +98,7 @@ impl<S> CookieService<S> {
         let hdr = {
             let store = self.store.read().unwrap();
             self.header_buf.clear();
-            let mut iter = store.get_request_values(&url);
+            let mut iter = store.get_request_values(url);
             if let Some((k, v)) = iter.next() {
                 let _ = write!(&mut self.header_buf, "{k}={v}");
                 for (k, v) in iter {

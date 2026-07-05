@@ -40,11 +40,12 @@ impl Response {
         self.0.body()
     }
 }
+
+#[non_exhaustive]
 pub struct ResponseBody<B> {
     pub size: usize,
     pub digest: Digest,
     pub data: B,
-    _priv: (),
 }
 impl ResponseBody<Vec<u8>> {
     pub fn text(&self) -> Result<&str> {
@@ -83,7 +84,6 @@ impl RequestBuilder {
     pub fn header(self, k: HeaderName, v: HeaderValue) -> Self {
         Self {
             req: self.req.header(k, v),
-            ..self
         }
     }
     pub fn build(self, body: ReqBody) -> anyhow::Result<Request> {
@@ -101,7 +101,7 @@ impl Client {
             connector::DefaultConnector::new(root)?,
         )?))
     }
-    pub fn request<'a>(&'a mut self, method: http::Method, uri: http::Uri) -> RequestBuilder {
+    pub fn request(&mut self, method: http::Method, uri: http::Uri) -> RequestBuilder {
         RequestBuilder {
             req: http::request::Builder::new().method(method).uri(uri),
         }

@@ -89,6 +89,11 @@ impl std::io::Write for Hasher {
         Ok(())
     }
 }
+impl Default for Hasher {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Valuable)]
 pub enum Digest {

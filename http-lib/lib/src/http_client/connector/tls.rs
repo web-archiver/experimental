@@ -125,6 +125,7 @@ impl<T> MaybeHttpsConnector<T> {
                             roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
                         }))
                         .with_no_client_auth();
+                    cfg.enable_sni = true;
                     cfg.key_log = Arc::new(crate::tls::FileKeyLog::new(root)?);
                     cfg
                 })

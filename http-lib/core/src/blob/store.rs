@@ -32,6 +32,11 @@ impl PathBuf {
         unsafe { std::ffi::CStr::from_bytes_with_nul_unchecked(&self.0) }
     }
 }
+impl Default for PathBuf {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 pub struct Store {
     root: OwnedFd,
@@ -45,7 +50,7 @@ impl Store {
     pub fn open(root: OwnedFd) -> Result<Self> {
         Ok(Self { root })
     }
-    pub fn root_fd(&self) -> BorrowedFd {
+    pub fn root_fd(&self) -> BorrowedFd<'_> {
         self.root.as_fd()
     }
     pub fn add_blob(&self, digest: &Digest, data: &[u8]) -> Result<bool> {

@@ -58,7 +58,9 @@ impl valuable::Valuable for &NFStr {
     where
         Self: Sized,
     {
-        visit.visit_primitive_slice(valuable::Slice::Str(unsafe { std::mem::transmute(slice) }))
+        visit.visit_primitive_slice(valuable::Slice::Str(unsafe {
+            std::mem::transmute::<&[&NFStr], &[&str]>(slice)
+        }))
     }
 }
 

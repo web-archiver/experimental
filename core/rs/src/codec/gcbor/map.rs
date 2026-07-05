@@ -104,7 +104,7 @@ impl<K, V> GCborMap<K, V> {
     {
         self.0.remove(KeyBorrow::new(k))
     }
-    pub fn entry(&mut self, k: K) -> Entry<K, V>
+    pub fn entry<'a>(&'a mut self, k: K) -> Entry<'a, K, V>
     where
         K: GCborOrd,
     {

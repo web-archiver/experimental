@@ -170,7 +170,7 @@ impl Connection {
             )
         };
         self.write_event(EventKind::Status {
-            info: TcpInfo::from_libc(&val),
+            info: TcpInfo::from_libc(val),
             raw: Bytes::new(raw_val),
         });
         self.next_status_check = now_instant + STATUS_DURATION;
@@ -339,12 +339,12 @@ where
                             event_log: event_file.into(),
                             log_buf: val_buf,
                             shutting_down: false,
-                            conn: conn,
+                            conn,
                         };
                         ret.write_status();
                         Poll::Ready(Ok(ret))
                     }
-                    Err(e) => return Poll::Ready(Err(ConnectError::LogFile(e.into()))),
+                    Err(e) => Poll::Ready(Err(ConnectError::LogFile(e.into()))),
                 }
             }
             Poll::Ready(Err(e)) => Poll::Ready(Err(ConnectError::Http(e))),
