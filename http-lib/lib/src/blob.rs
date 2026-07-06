@@ -98,15 +98,17 @@ impl BlobFile {
 
 pub struct BlobStore {
     store: Store,
-    shared_index: Index,
+    shared_index: Option<Index>,
     tmp_dir: OwnedFd,
     incremental_info_fd: OwnedFd,
     incremental_info: Mutex<IncrementalInfo>,
 }
 impl BlobStore {
-    pub(crate) fn new(root: BorrowedFd, shared_index_path: &str) -> Result<Self> {
-        let shared_index =
-            Index::open_ro(shared_index_path).context("failed to open shared index")?;
+    pub(crate) fn new(root: BorrowedFd, shared_index_path: Option<&str>) -> Result<Self> {
+        let shared_index = match shared_index_path {
+            Some(p) => Some(Index::open_ro(p).context("failed to open shared index")?),
+            None => None,
+        };
 
         create_dir(root, c"blob").context("failed to create blob root")?;
 
@@ -160,50 +162,47 @@ impl BlobStore {
     }
 
     pub fn add_data(&self, digest: &Digest, info: Info, data: &[u8]) -> Result<()> {
-        if self
-            .shared_index
-            .exists(digest)
-            .context("failed to check index")?
-        {
-            self.incremental_info
-                .lock()
-                .unwrap()
-                .existing
-                .insert(*digest);
-        } else {
-            self.store
-                .add_blob(digest, data)
-                .context("failed to add data to store")?;
+        match &self.shared_index {
+            Some(idx) if idx.exists(digest)? => {
+                self.incremental_info
+                    .lock()
+                    .unwrap()
+                    .existing
+                    .insert(*digest);
+            }
+            _ => {
+                self.store
+                    .add_blob(digest, data)
+                    .context("failed to add data to store")?;
 
-            self.update_info(digest, info);
+                self.update_info(digest, info);
+            }
         }
-
         Ok(())
     }
 
     pub fn add_file(&self, file: &BlobFile) -> Result<Digest> {
-        if self
-            .shared_index
-            .exists(&file.digest)
-            .context("failed to query index")?
-        {
-            self.incremental_info
-                .lock()
-                .unwrap()
-                .existing
-                .insert(file.digest);
-        } else {
-            self.store
-                .link_fd(&file.digest, file.file.as_fd())
-                .context("failed to write to store")?;
+        match &self.shared_index {
+            Some(idx) if idx.exists(&file.digest)? => {
+                self.incremental_info
+                    .lock()
+                    .unwrap()
+                    .existing
+                    .insert(file.digest);
+            }
+            _ => {
+                self.store
+                    .link_fd(&file.digest, file.file.as_fd())
+                    .context("failed to write to store")?;
 
-            self.update_info(
-                &file.digest,
-                Info {
-                    size: file.size as u64,
-                    is_compressible: file.compressible,
-                },
-            );
+                self.update_info(
+                    &file.digest,
+                    Info {
+                        size: file.size as u64,
+                        is_compressible: file.compressible,
+                    },
+                );
+            }
         }
         Ok(file.digest)
     }

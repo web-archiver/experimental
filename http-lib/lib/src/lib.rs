@@ -47,19 +47,26 @@ pub struct Context<'a> {
     pub http_cloent: &'a mut http_client::Client,
 }
 
+#[derive(Default)]
+#[non_exhaustive]
+pub struct FetcherArgs<'a> {
+    pub shared_blob_index: Option<&'a str>,
+    pub shared_object_index: Option<&'a str>,
+}
+
 fn run(
     root: BorrowedFd,
     start_time: Timestamp,
     uuid: uuid::Uuid,
-    shared_blob_index: &str,
-    shared_object_index: &str,
+    args: FetcherArgs<'_>,
     main: impl FnOnce(Context<'_>) -> anyhow::Result<()>,
 ) -> Result<()> {
     let rt = tokio::runtime::Runtime::new().context("failed to create tokio runtime")?;
     let blob_store = Arc::new(
-        blob::BlobStore::new(root, shared_blob_index).context("failed to create blob store")?,
+        blob::BlobStore::new(root, args.shared_blob_index)
+            .context("failed to create blob store")?,
     );
-    let mut object_store = object_store::MakeStore::new(root, shared_object_index)
+    let mut object_store = object_store::MakeStore::new(root, args.shared_object_index)
         .context("failed to create object store factory")?;
     let mut http_client = http_client::Client::new(root, Arc::clone(&blob_store))
         .context("failed to init http client")?;
@@ -115,8 +122,7 @@ fn run(
 
 pub fn run_fetcher(
     parent: &str,
-    shared_blob_index: &str,
-    shared_object_index: &str,
+    args: FetcherArgs<'_>,
     main: impl FnOnce(Context<'_>) -> anyhow::Result<()>,
 ) -> ExitCode {
     let start_time = Timestamp::now();
@@ -133,14 +139,7 @@ pub fn run_fetcher(
             }
             tracing::info!(path = &root_path, "data will be saved to {root_path}");
             tls::global_init();
-            match run(
-                root,
-                start_time,
-                uuid,
-                shared_blob_index,
-                shared_object_index,
-                main,
-            ) {
+            match run(root, start_time, uuid, args, main) {
                 Ok(()) => Ok(()),
                 Err(e) => {
                     tracing::error!(err = e.as_ref() as &dyn std::error::Error, "error: {e:?}");

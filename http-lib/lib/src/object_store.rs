@@ -21,22 +21,26 @@ pub struct ObjectStore<S, I: ?Sized> {
     instance: EncodedVal<I>,
     version: u16,
     val_buf: ValueBuf,
-    index: Arc<Mutex<webar_http_lib_core::object::index::Index>>,
+    index: Option<Arc<Mutex<webar_http_lib_core::object::index::Index>>>,
     data_file: std::fs::File,
 }
 impl<S: AsRef<str>, I> ObjectStore<S, I> {
     pub fn exists<O: ToGCbor>(&mut self, obj: &O) -> Result<bool, Error> {
-        let id = self.val_buf.encode(obj);
-        self.index
-            .lock()
-            .unwrap()
-            .exists(&webar_http_lib_core::object::index::Entry {
-                server: self.server.as_ref(),
-                instance: self.instance.as_bytes(),
-                version: self.version,
-                object: id.as_bytes(),
-            })
-            .map_err(Into::into)
+        match &self.index {
+            Some(idx) => {
+                let id = self.val_buf.encode(obj);
+                idx.lock()
+                    .unwrap()
+                    .exists(&webar_http_lib_core::object::index::Entry {
+                        server: self.server.as_ref(),
+                        instance: self.instance.as_bytes(),
+                        version: self.version,
+                        object: id.as_bytes(),
+                    })
+                    .map_err(Into::into)
+            }
+            None => Ok(false),
+        }
     }
     pub fn add_object(&mut self, ty: &impl ToGCbor, data: &impl ToGCbor) -> Result<(), Error> {
         let val = self.val_buf.encode(&Object { ty, data });
@@ -55,18 +59,23 @@ struct StoreInfo<'a, I, U> {
 pub struct MakeStore {
     path_buf: Vec<u8>,
     val_buf: ValueBuf,
-    index: Arc<Mutex<webar_http_lib_core::object::index::Index>>,
+    index: Option<Arc<Mutex<webar_http_lib_core::object::index::Index>>>,
     object_dir: OwnedFd,
 }
 impl MakeStore {
-    pub(crate) fn new(root: BorrowedFd<'_>, index_path: &str) -> anyhow::Result<Self> {
-        let index = webar_http_lib_core::object::index::Index::open(index_path)
-            .context("failed to open index database")?;
+    pub(crate) fn new(root: BorrowedFd<'_>, index_path: Option<&str>) -> anyhow::Result<Self> {
+        let index = match index_path {
+            Some(p) => Some(Arc::new(Mutex::new(
+                webar_http_lib_core::object::index::Index::open(p)
+                    .context("failed to open index database")?,
+            ))),
+            None => None,
+        };
         let object_dir = open_new_dir(root, c"objects")?;
         Ok(Self {
             path_buf: Vec::new(),
             val_buf: ValueBuf::new(),
-            index: Arc::new(Mutex::new(index)),
+            index,
             object_dir,
         })
     }
@@ -117,7 +126,7 @@ impl MakeStore {
             instance,
             version,
             val_buf: ValueBuf::new(),
-            index: Arc::clone(&self.index),
+            index: self.index.clone(),
             data_file: file.into(),
         })
     }
