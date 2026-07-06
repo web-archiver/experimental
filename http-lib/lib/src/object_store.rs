@@ -1,74 +1,124 @@
 use std::{
     io::Write,
-    os::fd::BorrowedFd,
+    os::fd::{AsFd, BorrowedFd, OwnedFd},
     sync::{Arc, Mutex},
 };
 
 use anyhow::Context;
 use webar_core::codec::gcbor::{EncodedVal, ToGCbor, ValueBuf};
-use webar_http_lib_core::utils::create_file;
-
-pub struct InstanceInfo<S, I: ?Sized> {
-    server: S,
-    instance: EncodedVal<I>,
-    version: u16,
-}
-impl<S, I: ?Sized> InstanceInfo<S, I> {
-    pub fn new(server: S, instance: &I, version: u16) -> Self
-    where
-        I: ToGCbor,
-    {
-        Self {
-            server,
-            instance: EncodedVal::new(instance),
-            version,
-        }
-    }
-}
+use webar_http_lib_core::utils::{create_dir, create_file, open_new_dir, write_file};
 
 pub type Error = anyhow::Error;
 
-#[derive(Clone)]
-pub struct ObjectStore {
+#[derive(ToGCbor)]
+struct Object<T, O> {
+    ty: T,
+    data: O,
+}
+
+pub struct ObjectStore<S, I: ?Sized> {
+    server: S,
+    instance: EncodedVal<I>,
+    version: u16,
     val_buf: ValueBuf,
     index: Arc<Mutex<webar_http_lib_core::object::index::Index>>,
-    data_file: Arc<Mutex<std::fs::File>>,
+    data_file: std::fs::File,
 }
-impl ObjectStore {
-    pub(crate) fn new(root: BorrowedFd<'_>, index_path: &str) -> anyhow::Result<Self> {
-        let index = webar_http_lib_core::object::index::Index::open(index_path)
-            .context("failed to open index database")?;
-        let data = create_file(root, c"objects.bin").context("failed to create object file")?;
-        Ok(Self {
-            val_buf: ValueBuf::new(),
-            index: Arc::new(Mutex::new(index)),
-            data_file: Arc::new(Mutex::new(data.into())),
-        })
-    }
-
-    pub fn exists<S: AsRef<str>, I: ?Sized, O: ToGCbor + ?Sized>(
-        &mut self,
-        inst: &InstanceInfo<S, I>,
-        obj: &O,
-    ) -> Result<bool, Error> {
+impl<S: AsRef<str>, I> ObjectStore<S, I> {
+    pub fn exists<O: ToGCbor>(&mut self, obj: &O) -> Result<bool, Error> {
         let id = self.val_buf.encode(obj);
         self.index
             .lock()
             .unwrap()
             .exists(&webar_http_lib_core::object::index::Entry {
-                server: inst.server.as_ref(),
-                instance: inst.instance.as_bytes(),
-                version: inst.version,
+                server: self.server.as_ref(),
+                instance: self.instance.as_bytes(),
+                version: self.version,
                 object: id.as_bytes(),
             })
             .map_err(Into::into)
     }
-    pub fn add_object<O: ToGCbor + ?Sized>(&mut self, data: &O) -> Result<(), Error> {
-        let val = self.val_buf.encode(data);
-        self.data_file
-            .lock()
-            .unwrap()
-            .write_all(val.as_bytes())
-            .map_err(Into::into)
+    pub fn add_object(&mut self, ty: &impl ToGCbor, data: &impl ToGCbor) -> Result<(), Error> {
+        let val = self.val_buf.encode(&Object { ty, data });
+        self.data_file.write_all(val.as_bytes()).map_err(Into::into)
+    }
+}
+
+#[derive(ToGCbor)]
+struct StoreInfo<'a, I, U> {
+    server: &'a str,
+    instance: &'a EncodedVal<I>,
+    version: u16,
+    user: &'a U,
+}
+
+pub struct MakeStore {
+    path_buf: Vec<u8>,
+    val_buf: ValueBuf,
+    index: Arc<Mutex<webar_http_lib_core::object::index::Index>>,
+    object_dir: OwnedFd,
+}
+impl MakeStore {
+    pub(crate) fn new(root: BorrowedFd<'_>, index_path: &str) -> anyhow::Result<Self> {
+        let index = webar_http_lib_core::object::index::Index::open(index_path)
+            .context("failed to open index database")?;
+        let object_dir = open_new_dir(root, c"objects")?;
+        Ok(Self {
+            path_buf: Vec::new(),
+            val_buf: ValueBuf::new(),
+            index: Arc::new(Mutex::new(index)),
+            object_dir,
+        })
+    }
+    pub fn make_store<S, I, U>(
+        &mut self,
+        name: &str,
+        server: S,
+        instance: I,
+        version: u16,
+        user: &U,
+    ) -> Result<ObjectStore<S, I>, rustix::io::Errno>
+    where
+        S: AsRef<str>,
+        I: ToGCbor,
+        U: ToGCbor,
+    {
+        self.path_buf.clear();
+        let _ = write!(&mut self.path_buf, "{name}\0");
+        create_dir(
+            self.object_dir.as_fd(),
+            std::ffi::CStr::from_bytes_with_nul(&self.path_buf).unwrap(),
+        )?;
+
+        self.path_buf.clear();
+        let _ = write!(&mut self.path_buf, "{name}/info.bin\0");
+        let instance = EncodedVal::new(&instance);
+        let v = self.val_buf.encode(&StoreInfo {
+            server: server.as_ref(),
+            instance: &instance,
+            version,
+            user,
+        });
+        write_file(
+            self.object_dir.as_fd(),
+            std::ffi::CStr::from_bytes_with_nul(&self.path_buf).unwrap(),
+            v.as_bytes(),
+        )?;
+
+        self.path_buf.clear();
+        let _ = write!(&mut self.path_buf, "{name}/data.bin\0");
+        let file = create_file(
+            self.object_dir.as_fd(),
+            std::ffi::CStr::from_bytes_with_nul(&self.path_buf).unwrap(),
+        )?;
+
+        Ok(ObjectStore {
+            server,
+            instance,
+            version,
+            val_buf: ValueBuf::new(),
+            index: Arc::clone(&self.index),
+            data_file: file.into(),
+        })
     }
 }

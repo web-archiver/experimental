@@ -2,7 +2,7 @@
 
 use std::{os::fd::BorrowedFd, process::ExitCode, sync::Arc};
 
-use anyhow::{Context, Result};
+use anyhow::{Context as _, Result};
 use webar_core::{
     codec::gcbor::{self, ToGCbor},
     time::{TimePeriod, Timestamp},
@@ -39,21 +39,29 @@ struct FetchInfo<'a> {
     system: SystemInfo<'a>,
 }
 
+#[non_exhaustive]
+pub struct Context<'a> {
+    pub runtime: &'a tokio::runtime::Handle,
+    pub blob_store: &'a Arc<blob::BlobStore>,
+    pub object_store: &'a mut object_store::MakeStore,
+    pub http_cloent: &'a mut http_client::Client,
+}
+
 fn run(
     root: BorrowedFd,
     start_time: Timestamp,
     uuid: uuid::Uuid,
-    shared_index: &str,
-    main: impl FnOnce(
-        &tokio::runtime::Handle,
-        &http_client::Client,
-        &Arc<blob::BlobStore>,
-    ) -> anyhow::Result<()>,
+    shared_blob_index: &str,
+    shared_object_index: &str,
+    main: impl FnOnce(Context<'_>) -> anyhow::Result<()>,
 ) -> Result<()> {
     let rt = tokio::runtime::Runtime::new().context("failed to create tokio runtime")?;
-    let blob_store =
-        Arc::new(blob::BlobStore::new(root, shared_index).context("failed to create blob store")?);
-    let http_client = http_client::Client::new(root, Arc::clone(&blob_store))
+    let blob_store = Arc::new(
+        blob::BlobStore::new(root, shared_blob_index).context("failed to create blob store")?,
+    );
+    let mut object_store = object_store::MakeStore::new(root, shared_object_index)
+        .context("failed to create object store factory")?;
+    let mut http_client = http_client::Client::new(root, Arc::clone(&blob_store))
         .context("failed to init http client")?;
     let un = rustix::system::uname();
     let uname_str = un
@@ -76,7 +84,13 @@ fn run(
         })
         .context("invalid utf8 character in uname")?;
 
-    main(rt.handle(), &http_client, &blob_store).context("fetcher function returns error")?;
+    main(Context {
+        runtime: rt.handle(),
+        blob_store: &blob_store,
+        object_store: &mut object_store,
+        http_cloent: &mut http_client,
+    })
+    .context("fetcher function returns error")?;
 
     let end_time = Timestamp::now();
 
@@ -101,12 +115,9 @@ fn run(
 
 pub fn run_fetcher(
     parent: &str,
-    shared_index: &str,
-    main: impl FnOnce(
-        &tokio::runtime::Handle,
-        &http_client::Client,
-        &Arc<blob::BlobStore>,
-    ) -> anyhow::Result<()>,
+    shared_blob_index: &str,
+    shared_object_index: &str,
+    main: impl FnOnce(Context<'_>) -> anyhow::Result<()>,
 ) -> ExitCode {
     let start_time = Timestamp::now();
     let uuid = uuid::Uuid::new_v7(uuid::Timestamp::from_unix(
@@ -122,7 +133,14 @@ pub fn run_fetcher(
             }
             tracing::info!(path = &root_path, "data will be saved to {root_path}");
             tls::global_init();
-            match run(root, start_time, uuid, shared_index, main) {
+            match run(
+                root,
+                start_time,
+                uuid,
+                shared_blob_index,
+                shared_object_index,
+                main,
+            ) {
                 Ok(()) => Ok(()),
                 Err(e) => {
                     tracing::error!(err = e.as_ref() as &dyn std::error::Error, "error: {e:?}");
