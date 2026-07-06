@@ -4,9 +4,10 @@ use std::{os::fd::BorrowedFd, process::ExitCode, sync::Arc};
 
 use anyhow::{Context, Result};
 use webar_core::{
-    codec::gcbor::{GCborCodec, ToGCbor},
+    codec::gcbor::{self, ToGCbor},
     time::{TimePeriod, Timestamp},
 };
+use webar_http_lib_core::utils::create_file;
 
 pub mod blob;
 pub mod http_client;
@@ -14,9 +15,6 @@ pub mod log;
 pub mod object_store;
 mod tls;
 mod traffic;
-
-const DATA_FILE: webar_http_lib_core::FilePath =
-    webar_http_lib_core::FilePath::new_throw(c"data.tar");
 
 #[derive(ToGCbor)]
 struct Uname<'a> {
@@ -35,7 +33,7 @@ struct SystemInfo<'a> {
 }
 
 #[derive(ToGCbor)]
-struct FetchMeta<'a> {
+struct FetchInfo<'a> {
     uuid: uuid::Uuid,
     time: TimePeriod,
     system: SystemInfo<'a>,
@@ -46,8 +44,13 @@ fn run(
     start_time: Timestamp,
     uuid: uuid::Uuid,
     shared_index: &str,
-    main: impl FnOnce(tokio::runtime::Handle, &http_client::Client) -> anyhow::Result<()>,
+    main: impl FnOnce(
+        &tokio::runtime::Handle,
+        &http_client::Client,
+        &Arc<blob::BlobStore>,
+    ) -> anyhow::Result<()>,
 ) -> Result<()> {
+    let rt = tokio::runtime::Runtime::new().context("failed to create tokio runtime")?;
     let blob_store =
         Arc::new(blob::BlobStore::new(root, shared_index).context("failed to create blob store")?);
     let http_client = http_client::Client::new(root, Arc::clone(&blob_store))
@@ -73,14 +76,37 @@ fn run(
         })
         .context("invalid utf8 character in uname")?;
 
+    main(rt.handle(), &http_client, &blob_store).context("fetcher function returns error")?;
+
+    let end_time = Timestamp::now();
+
     blob_store.save().context("failed to finish blob store")?;
-    todo!()
+    std::io::Write::write_all(
+        &mut std::fs::File::from(
+            create_file(root, c"info.bin").context("failed to create info file")?,
+        ),
+        &gcbor::to_vec(&FetchInfo {
+            uuid,
+            time: TimePeriod(start_time, end_time),
+            system: SystemInfo {
+                uname: uname_str,
+                build_target: webar_target_info::BUILD_TARGET,
+            },
+        }),
+    )
+    .context("failed to write fetch info")?;
+
+    Ok(())
 }
 
 pub fn run_fetcher(
     parent: &str,
     shared_index: &str,
-    main: impl FnOnce(tokio::runtime::Handle, &http_client::Client) -> anyhow::Result<()>,
+    main: impl FnOnce(
+        &tokio::runtime::Handle,
+        &http_client::Client,
+        &Arc<blob::BlobStore>,
+    ) -> anyhow::Result<()>,
 ) -> ExitCode {
     let start_time = Timestamp::now();
     let uuid = uuid::Uuid::new_v7(uuid::Timestamp::from_unix(
