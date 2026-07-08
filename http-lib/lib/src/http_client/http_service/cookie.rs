@@ -102,7 +102,7 @@ impl<S> CookieService<S> {
             if let Some((k, v)) = iter.next() {
                 let _ = write!(&mut self.header_buf, "{k}={v}");
                 for (k, v) in iter {
-                    let _ = write!(&mut self.header_buf, ";{k}={v}");
+                    let _ = write!(&mut self.header_buf, "; {k}={v}");
                 }
             }
             if self.header_buf.is_empty() {
