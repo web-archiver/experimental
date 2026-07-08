@@ -40,6 +40,7 @@ impl http_body::Body for ReqBody {
     }
 }
 
+pub mod browser_header;
 pub mod cookie;
 pub mod decompress;
 pub mod record;
@@ -47,8 +48,10 @@ pub mod timing;
 
 type DefaultInner<C> = cookie::CookieService<
     decompress::Decompress<
-        record::RecordService<
-            timing::TimingService<hyper_util::client::legacy::Client<C, timing::TimedBody>>,
+        browser_header::BrowserHeaderService<
+            record::RecordService<
+                timing::TimingService<hyper_util::client::legacy::Client<C, timing::TimedBody>>,
+            >,
         >,
     >,
 >;
@@ -69,15 +72,19 @@ impl<C> DefaultService<C> {
     {
         Ok(Self(cookie::CookieService::new(
             cookies,
-            decompress::Decompress::new(record::RecordService::new(
-                root,
-                blob_store,
-                timing::TimingService::new(
-                    hyper_util::client::legacy::Builder::new(hyper_util::rt::TokioExecutor::new())
+            decompress::Decompress::new(browser_header::BrowserHeaderService::new(
+                record::RecordService::new(
+                    root,
+                    blob_store,
+                    timing::TimingService::new(
+                        hyper_util::client::legacy::Builder::new(
+                            hyper_util::rt::TokioExecutor::new(),
+                        )
                         .set_host(false)
                         .build(connector),
-                ),
-            )?),
+                    ),
+                )?,
+            )),
         )))
     }
 }
