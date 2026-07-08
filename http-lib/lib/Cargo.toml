@@ -63,3 +63,5 @@ brotli = "8.0.4"
 flate2 = "1.1.9"
 zstd = "0.13.3"
 webar-target-info = { version = "0.1.0", path = "../target-info" }
+cookie = "0.18.1"
+time = "0.3.53"

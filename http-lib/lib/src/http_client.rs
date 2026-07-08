@@ -12,6 +12,7 @@ pub use http_service::{record::MessageId, ReqBody};
 
 mod compressible;
 mod connector;
+pub mod cookie;
 mod http_service;
 
 #[derive(Debug, thiserror::Error)]
@@ -94,10 +95,15 @@ impl RequestBuilder {
 #[derive(Clone)]
 pub struct Client(http_service::DefaultService<connector::DefaultConnector>);
 impl Client {
-    pub(crate) fn new(root: BorrowedFd<'_>, blob_store: Arc<BlobStore>) -> anyhow::Result<Self> {
+    pub(crate) fn new(
+        root: BorrowedFd<'_>,
+        blob_store: Arc<BlobStore>,
+        cookies: Option<cookie::CookieStore>,
+    ) -> anyhow::Result<Self> {
         Ok(Self(http_service::DefaultService::new(
             root,
             blob_store,
+            cookies.unwrap_or_default().0,
             connector::DefaultConnector::new(root)?,
         )?))
     }

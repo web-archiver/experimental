@@ -49,16 +49,17 @@ pub struct Context<'a> {
 
 #[derive(Default)]
 #[non_exhaustive]
-pub struct FetcherArgs<'a> {
+pub struct FetcherConfig<'a> {
     pub shared_blob_index: Option<&'a str>,
     pub shared_object_index: Option<&'a str>,
+    pub cookie_store: Option<http_client::cookie::CookieStore>,
 }
 
 fn run(
     root: BorrowedFd,
     start_time: Timestamp,
     uuid: uuid::Uuid,
-    args: FetcherArgs<'_>,
+    args: FetcherConfig<'_>,
     main: impl FnOnce(Context<'_>) -> anyhow::Result<()>,
 ) -> Result<()> {
     let rt = tokio::runtime::Runtime::new().context("failed to create tokio runtime")?;
@@ -68,8 +69,9 @@ fn run(
     );
     let mut object_store = object_store::MakeStore::new(root, args.shared_object_index)
         .context("failed to create object store factory")?;
-    let mut http_client = http_client::Client::new(root, Arc::clone(&blob_store))
-        .context("failed to init http client")?;
+    let mut http_client =
+        http_client::Client::new(root, Arc::clone(&blob_store), args.cookie_store)
+            .context("failed to init http client")?;
     let un = rustix::system::uname();
     let uname_str = un
         .sysname()
@@ -122,7 +124,7 @@ fn run(
 
 pub fn run_fetcher(
     parent: &str,
-    args: FetcherArgs<'_>,
+    args: FetcherConfig<'_>,
     main: impl FnOnce(Context<'_>) -> anyhow::Result<()>,
 ) -> ExitCode {
     let start_time = Timestamp::now();

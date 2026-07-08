@@ -61,12 +61,14 @@ impl<C> DefaultService<C> {
     pub(crate) fn new(
         root: BorrowedFd<'_>,
         blob_store: Arc<crate::blob::BlobStore>,
+        cookies: cookie_store::CookieStore,
         connector: C,
     ) -> Result<Self, rustix::io::Errno>
     where
         C: hyper_util::client::legacy::connect::Connect + Clone + Send + Sync + 'static,
     {
         Ok(Self(cookie::CookieService::new(
+            cookies,
             decompress::Decompress::new(record::RecordService::new(
                 root,
                 blob_store,

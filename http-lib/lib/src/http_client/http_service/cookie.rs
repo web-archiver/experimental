@@ -80,9 +80,9 @@ pub struct CookieService<S> {
     inner: S,
 }
 impl<S> CookieService<S> {
-    pub fn new(inner: S) -> Self {
+    pub fn new(store: cookie_store::CookieStore, inner: S) -> Self {
         Self {
-            store: Arc::new(RwLock::new(cookie_store::CookieStore::new())),
+            store: Arc::new(RwLock::new(store)),
             uri_buf: String::new(),
             header_buf: String::new(),
             inner,
