@@ -35,17 +35,17 @@ impl DefaultConnector {
         fetcher_id: &uuid::Uuid,
         direct_connector_sock: &str,
     ) -> anyhow::Result<Self> {
-        let log_root = open_new_dir(root, c"connection_log")?;
-        create_dir(root, c"traffic")?;
+        let log_root = open_new_dir(root, c"connection")?;
+        create_dir(root, c"dumpcap")?;
         let tcp_connector = runtime
             .block_on(webar_direct_connector::client::Client::new_capture_link(
                 direct_connector_sock,
                 fetcher_id,
                 root,
                 webar_direct_connector::client::OutputPath {
-                    version: c"traffic/dumpcap.version",
-                    log: c"traffic/dumpcap.log",
-                    data: c"traffic/traffic.pcapng",
+                    version: c"dumpcap/dumpcap.version",
+                    log: c"dumpcap/dumpcap.log",
+                    data: c"dumpcap/traffic.pcapng",
                 },
             ))
             .context("failed to init tcp connector")?;
