@@ -28,11 +28,11 @@ fn add_default_headers<B>(req: &mut http::Request<B>) {
     set!(header::UPGRADE_INSECURE_REQUESTS, "1");
     set!(
         header::USER_AGENT,
-        include_str!("./browser_header/chrome-149-linux-ua.txt")
+        include_str!("./browser_header/chrome-149-linux-ua.txt").trim_ascii()
     );
     set!(
         header::ACCEPT,
-        include_str!("./browser_header/chrome-149-linux-accept.txt")
+        include_str!("./browser_header/chrome-149-linux-accept.txt").trim_ascii()
     );
     set!(SEC_FETCH_SITE, "none");
     set!(SEC_FETCH_MODE, "navigate");
