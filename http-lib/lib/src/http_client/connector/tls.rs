@@ -11,19 +11,24 @@ use webar_core::{
 };
 use webar_http_lib_core::utils::write_file;
 
-use super::ConnectionExt;
+use super::conn_meta::ConnectionMeta;
 
 #[derive(Debug, Clone)]
 pub struct CaptureMaybeHttpsHandshake;
 impl<T> super::capture::Config<MaybeHttpsStream<T>> for CaptureMaybeHttpsHandshake {
-    const RX_PATH: &'static std::ffi::CStr = c"tls_rx_data.bin";
-    const RX_MAX_SIZE: Option<std::num::NonZeroU64> = std::num::NonZeroU64::new(512 * 1024);
-    const TX_PATH: &'static std::ffi::CStr = c"tls_tx_data.bin";
-    const TX_MAX_SIZE: Option<std::num::NonZeroU64> = std::num::NonZeroU64::new(512 * 1024);
-    fn should_capture(conn: &MaybeHttpsStream<T>) -> bool {
+    fn capture_config(&self, conn: &MaybeHttpsStream<T>) -> Option<&super::capture::CaptureConfig> {
         match conn {
-            MaybeHttpsStream::Http(_) => false,
-            MaybeHttpsStream::Https(_) => true,
+            MaybeHttpsStream::Http(_) => None,
+            MaybeHttpsStream::Https(_) => Some(
+                &const {
+                    super::capture::CaptureConfig {
+                        rx_path: c"tls_rx_data.bin",
+                        rx_max_size: std::num::NonZeroU64::new(512 * 1024),
+                        tx_path: c"tls_tx_data.bin",
+                        tx_max_size: std::num::NonZeroU64::new(512 * 1024),
+                    }
+                },
+            ),
         }
     }
 }
@@ -51,7 +56,7 @@ pub struct ConnectFuture<F>(#[pin] F);
 impl<F, T> Future for ConnectFuture<F>
 where
     F: Future<Output = Result<MaybeHttpsStream<T>, Box<dyn std::error::Error + Send + Sync>>>,
-    T: HyperConnection + super::ConnectionExt,
+    T: HyperConnection + ConnectionMeta,
 {
     type Output = Result<MaybeHttpsStream<T>, Error>;
     fn poll(
@@ -90,7 +95,7 @@ where
         }
     }
 }
-impl<T: ConnectionExt> ConnectionExt for tokio_rustls::client::TlsStream<T> {
+impl<T: ConnectionMeta> ConnectionMeta for tokio_rustls::client::TlsStream<T> {
     fn uuid(&self) -> uuid::Uuid {
         self.get_ref().0.uuid()
     }
@@ -98,7 +103,7 @@ impl<T: ConnectionExt> ConnectionExt for tokio_rustls::client::TlsStream<T> {
         self.get_ref().0.data_root()
     }
 }
-impl<T: super::ConnectionExt> super::ConnectionExt for MaybeHttpsStream<T> {
+impl<T: ConnectionMeta> ConnectionMeta for MaybeHttpsStream<T> {
     fn uuid(&self) -> uuid::Uuid {
         match self {
             Self::Http(c) => c.uuid(),
@@ -138,7 +143,7 @@ impl<T> MaybeHttpsConnector<T> {
 impl<T> tower_service::Service<http::Uri> for MaybeHttpsConnector<T>
 where
     T: tower_service::Service<http::Uri>,
-    T::Response: Read + Write + HyperConnection + ConnectionExt + Send + Unpin + 'static,
+    T::Response: Read + Write + HyperConnection + ConnectionMeta + Send + Unpin + 'static,
     T::Future: Send + 'static,
     T::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
 {

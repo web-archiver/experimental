@@ -7,14 +7,7 @@ license.workspace = true
 [dependencies]
 anyhow.workspace = true
 const-hex.workspace = true
-tar.workspace = true
-rustix = { workspace = true, features = [
-  "runtime",
-  "process",
-  "thread",
-  "system",
-  "net",
-] }
+rustix = { workspace = true, features = ["runtime", "thread", "system", "net"] }
 rustls = "0.23.21"
 webpki-roots = "1.0.7"
 # logging
@@ -70,3 +63,6 @@ webar-target-info = { version = "0.1.0", path = "../target-info" }
 cookie = "0.18.1"
 time = "0.3.53"
 publicsuffix = "2.3.0"
+webar-direct-connector = { version = "0.1.0", path = "../direct-connector", default-features = false, features = [
+  "client",
+] }

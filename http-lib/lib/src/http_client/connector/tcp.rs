@@ -1,10 +1,9 @@
 use std::{
-    ffi::CStr,
     future::Future,
     io::Write as _,
     mem::MaybeUninit,
     net::SocketAddr,
-    os::fd::{AsFd, AsRawFd, OwnedFd},
+    os::fd::AsRawFd,
     pin::Pin,
     sync::Arc,
     task::Poll,
@@ -12,26 +11,33 @@ use std::{
 };
 
 use hyper::rt::{Read, Write};
-use hyper_util::rt::TokioIo;
-use uuid::Uuid;
+
 use webar_core::{
     bytes::Bytes,
     codec::gcbor::{GCborCodec, ToGCbor, ValueBuf},
     time::Timestamp,
 };
-use webar_http_lib_core::utils::{create_file, open_new_dir, write_file};
+use webar_http_lib_core::utils::{create_file, write_file};
+
+use super::conn_meta::ConnectionMeta;
 
 const STATUS_DURATION: Duration = Duration::from_millis(128);
 
 #[derive(Debug, Clone)]
 pub struct CaptureHandshake;
 impl super::capture::Config<Connection> for CaptureHandshake {
-    const RX_MAX_SIZE: Option<std::num::NonZeroU64> = std::num::NonZeroU64::new(512 * 1024);
-    const RX_PATH: &'static CStr = c"tcp_rx_data.bin";
-    const TX_MAX_SIZE: Option<std::num::NonZeroU64> = std::num::NonZeroU64::new(512 * 1024);
-    const TX_PATH: &'static CStr = c"tcp_tx_data.bin";
-    fn should_capture(_: &Connection) -> bool {
-        true
+    #[inline]
+    fn capture_config(&self, _: &Connection) -> Option<&super::capture::CaptureConfig> {
+        Some(
+            &const {
+                super::capture::CaptureConfig {
+                    rx_max_size: std::num::NonZeroU64::new(512 * 1024),
+                    rx_path: c"tcp_rx_data.bin",
+                    tx_max_size: std::num::NonZeroU64::new(512 * 1024),
+                    tx_path: c"tcp_tx_data.bin",
+                }
+            },
+        )
     }
 }
 
@@ -43,8 +49,6 @@ pub(crate) struct Timing {
 
 #[derive(Debug, Clone, GCborCodec)]
 pub(crate) struct ConnectionInfoInner {
-    pub(crate) seq: u64,
-    pub(crate) uuid: Uuid,
     pub(crate) local_addr: SocketAddr,
     pub(crate) peer_addr: SocketAddr,
     pub(crate) timing: Timing,
@@ -115,16 +119,17 @@ struct Event<'a> {
     kind: EventKind<'a>,
 }
 
+type InnerConn = super::conn_meta::WithMeta<hyper_util::rt::TokioIo<tokio::net::TcpStream>>;
+
 #[pin_project::pin_project(PinnedDrop)]
 pub struct Connection {
-    data_root: OwnedFd,
     info: ConnectionInfo,
     next_status_check: Instant,
     event_log: std::fs::File,
     log_buf: ValueBuf,
     shutting_down: bool,
     #[pin]
-    conn: TokioIo<tokio::net::TcpStream>,
+    conn: InnerConn,
 }
 impl Connection {
     fn write_event(&mut self, kind: EventKind<'_>) {
@@ -134,7 +139,7 @@ impl Connection {
         });
         if let Err(e) = self.event_log.write_all(v.as_bytes()) {
             tracing::error!(
-                conn = %self.info.uuid,
+                conn = %self.conn.uuid(),
                 err = &e as &dyn std::error::Error,
                 "failed to write event: {e}"
             );
@@ -149,7 +154,7 @@ impl Connection {
         let (val, raw_val) = unsafe {
             let mut len = size_of::<libc::tcp_info>() as u32;
             if libc::getsockopt(
-                self.conn.inner().as_raw_fd(),
+                self.conn.conn.inner().as_raw_fd(),
                 libc::IPPROTO_TCP,
                 libc::TCP_INFO,
                 info_buf.as_mut_ptr().cast(),
@@ -158,7 +163,7 @@ impl Connection {
             {
                 let e = std::io::Error::last_os_error();
                 tracing::error!(
-                    conn = %self.info.uuid,
+                    conn = %self.conn.uuid(),
                     err = &e as &dyn std::error::Error,
                     "failed to get tcp connection info: {e}"
                 );
@@ -179,7 +184,7 @@ impl Connection {
     fn write_status(&mut self) {
         if let Err(e) = self.try_write_status() {
             tracing::error!(
-                conn = %self.info.uuid,
+                conn = %self.conn.uuid(),
                 error = &e as &dyn std::error::Error,
                 "failed to write status",
             );
@@ -243,20 +248,15 @@ impl Write for Connection {
 }
 impl hyper_util::client::legacy::connect::Connection for Connection {
     fn connected(&self) -> hyper_util::client::legacy::connect::Connected {
-        self.conn
-            .connected()
-            .extra(super::ConnMeta {
-                uuid: self.info.uuid,
-            })
-            .extra(Arc::clone(&self.info))
+        self.conn.connected().extra(Arc::clone(&self.info))
     }
 }
-impl super::ConnectionExt for Connection {
+impl ConnectionMeta for Connection {
     fn uuid(&self) -> uuid::Uuid {
-        self.info.uuid
+        self.conn.uuid()
     }
     fn data_root(&self) -> std::os::fd::BorrowedFd<'_> {
-        self.data_root.as_fd()
+        self.conn.data_root()
     }
 }
 #[pin_project::pinned_drop]
@@ -278,15 +278,13 @@ pub enum ConnectError<E> {
 
 #[pin_project::pin_project]
 pub struct ConnectFuture<F> {
-    log_root: Arc<OwnedFd>,
-    seq: u64,
     start_timestamp: Timestamp,
     #[pin]
     inner: F,
 }
 impl<F, E> Future for ConnectFuture<F>
 where
-    F: Future<Output = Result<TokioIo<tokio::net::TcpStream>, E>>,
+    F: Future<Output = Result<InnerConn, E>>,
 {
     type Output = Result<Connection, ConnectError<E>>;
     fn poll(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> Poll<Self::Output> {
@@ -295,15 +293,13 @@ where
             Poll::Pending => Poll::Pending,
             Poll::Ready(Ok(conn)) => {
                 let connected_ts = Timestamp::now();
-                let tcp_conn = conn.inner();
+                let tcp_conn = conn.conn.inner();
 
                 let info = match tcp_conn.local_addr().and_then(|la| {
                     let pa = tcp_conn.peer_addr()?;
                     Ok((la, pa))
                 }) {
                     Ok((la, pa)) => Arc::new(ConnectionInfoInner {
-                        seq: *proj.seq,
-                        uuid: uuid::Uuid::new_v4(),
                         local_addr: la,
                         peer_addr: pa,
                         timing: Timing {
@@ -316,24 +312,15 @@ where
 
                 let mut val_buf = ValueBuf::new();
 
-                let uuid = uuid::Uuid::new_v4();
-                let mut dir_buf = [0; uuid::fmt::Hyphenated::LENGTH + 1];
-                uuid.as_hyphenated().encode_lower(&mut dir_buf);
-                match open_new_dir(
-                    proj.log_root.as_fd(),
-                    CStr::from_bytes_with_nul(&dir_buf).unwrap(),
+                match write_file(
+                    conn.data_root(),
+                    c"tcp_info.bin",
+                    val_buf.encode(info.as_ref()).as_bytes(),
                 )
-                .and_then(|dir| {
-                    write_file(
-                        dir.as_fd(),
-                        c"tcp_info.bin",
-                        val_buf.encode(info.as_ref()).as_bytes(),
-                    )?;
-                    Ok((create_file(dir.as_fd(), c"tcp_events.bin")?, dir))
-                }) {
-                    Ok((event_file, dir)) => {
+                .and_then(|_| create_file(conn.data_root(), c"tcp_events.bin"))
+                {
+                    Ok(event_file) => {
                         let mut ret = Connection {
-                            data_root: dir,
                             info,
                             next_status_check: Instant::now(),
                             event_log: event_file.into(),
@@ -354,35 +341,25 @@ where
 
 #[derive(Debug, Clone)]
 pub struct TcpConnector<S> {
-    log_root: Arc<OwnedFd>,
-    seq: u64,
     inner: S,
 }
 impl<S> TcpConnector<S> {
-    pub(crate) fn new(log_root: OwnedFd, inner: S) -> Self {
-        Self {
-            log_root: Arc::new(log_root),
-            seq: 0,
-            inner,
-        }
+    pub(crate) fn new(inner: S) -> Self {
+        Self { inner }
     }
 }
-impl<S> tower_service::Service<http::Uri> for TcpConnector<S>
+impl<R, S> tower_service::Service<R> for TcpConnector<S>
 where
-    S: tower_service::Service<http::Uri, Response = TokioIo<tokio::net::TcpStream>>,
+    S: tower_service::Service<R, Response = InnerConn>,
 {
+    type Response = Connection;
     type Error = ConnectError<S::Error>;
     type Future = ConnectFuture<S::Future>;
-    type Response = Connection;
     fn poll_ready(&mut self, cx: &mut std::task::Context<'_>) -> Poll<Result<(), Self::Error>> {
         self.inner.poll_ready(cx).map_err(ConnectError::Http)
     }
-    fn call(&mut self, req: http::Uri) -> Self::Future {
-        let seq = self.seq;
-        self.seq += 1;
+    fn call(&mut self, req: R) -> Self::Future {
         ConnectFuture {
-            log_root: Arc::clone(&self.log_root),
-            seq,
             start_timestamp: Timestamp::now(),
             inner: self.inner.call(req),
         }

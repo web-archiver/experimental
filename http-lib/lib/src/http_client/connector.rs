@@ -1,28 +1,18 @@
 use std::os::fd::BorrowedFd;
 
+use anyhow::Context as _;
 use tower::Service;
-use webar_http_lib_core::utils::open_new_dir;
+
+use webar_http_lib_core::utils::{create_dir, open_new_dir};
 
 #[derive(Clone)]
 pub struct ConnMeta {
     pub(crate) uuid: uuid::Uuid,
 }
 
-#[allow(dead_code)]
-trait ConnectionExt {
-    fn uuid(&self) -> uuid::Uuid;
-    fn data_root(&self) -> BorrowedFd<'_>;
-}
-impl<C: ConnectionExt> ConnectionExt for hyper_util::rt::TokioIo<C> {
-    fn uuid(&self) -> uuid::Uuid {
-        self.inner().uuid()
-    }
-    fn data_root(&self) -> BorrowedFd<'_> {
-        self.inner().data_root()
-    }
-}
-
 pub mod capture;
+pub mod conn_meta;
+pub mod direct;
 pub mod tcp;
 pub mod tls;
 
@@ -31,7 +21,7 @@ type DefaultInner = capture::CaptureConnector<
     tls::MaybeHttpsConnector<
         capture::CaptureConnector<
             tcp::CaptureHandshake,
-            tcp::TcpConnector<hyper_util::client::legacy::connect::HttpConnector>,
+            tcp::TcpConnector<conn_meta::ConnMetaService<direct::TcpConnector>>,
         >,
     >,
 >;
@@ -39,15 +29,37 @@ type DefaultInner = capture::CaptureConnector<
 #[derive(Debug, Clone)]
 pub struct DefaultConnector(DefaultInner);
 impl DefaultConnector {
-    pub(crate) fn new(root: BorrowedFd<'_>) -> Result<Self, rustix::io::Errno> {
+    pub(crate) fn new(
+        root: BorrowedFd<'_>,
+        runtime: &tokio::runtime::Runtime,
+        fetcher_id: &uuid::Uuid,
+        direct_connector_sock: &str,
+    ) -> anyhow::Result<Self> {
         let log_root = open_new_dir(root, c"connection_log")?;
+        create_dir(root, c"traffic")?;
+        let tcp_connector = runtime
+            .block_on(webar_direct_connector::client::Client::new_capture_link(
+                direct_connector_sock,
+                fetcher_id,
+                root,
+                webar_direct_connector::client::OutputPath {
+                    version: c"traffic/dumpcap.version",
+                    log: c"traffic/dumpcap.log",
+                    data: c"traffic/traffic.pcapng",
+                },
+            ))
+            .context("failed to init tcp connector")?;
         Ok(Self(capture::CaptureConnector::new(
+            tls::CaptureMaybeHttpsHandshake,
             tls::MaybeHttpsConnector::new(
                 root,
-                capture::CaptureConnector::new(tcp::TcpConnector::new(
-                    log_root,
-                    hyper_util::client::legacy::connect::HttpConnector::new(),
-                )),
+                capture::CaptureConnector::new(
+                    tcp::CaptureHandshake,
+                    tcp::TcpConnector::new(conn_meta::ConnMetaService::new(
+                        log_root,
+                        direct::TcpConnector::from_client(tcp_connector),
+                    )),
+                ),
             )?,
         )))
     }

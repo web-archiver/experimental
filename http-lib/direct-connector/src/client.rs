@@ -1,4 +1,5 @@
 use std::{
+    ffi::CStr,
     mem::MaybeUninit,
     net::IpAddr,
     os::fd::{AsFd, BorrowedFd},
@@ -58,6 +59,13 @@ async fn read_error(sock: &mut UnixStream, len: usize) -> Error {
     })
 }
 
+pub struct OutputPath<'p> {
+    pub version: &'p CStr,
+    pub log: &'p CStr,
+    pub data: &'p CStr,
+}
+
+#[derive(Debug)]
 pub struct Client {
     sock: UnixStream,
     req_buf: Vec<u8>,
@@ -67,6 +75,7 @@ impl Client {
         sock: &str,
         fetcher_id: &uuid::Uuid,
         root: BorrowedFd<'_>,
+        out_paths: OutputPath<'_>,
     ) -> Result<Self, Error> {
         let mut sock = UnixStream::connect(sock).await.map_err(InnerError::Io)?;
         let mut req_buf = Vec::new();
@@ -121,21 +130,21 @@ impl Client {
                         version_fd.as_fd(),
                         c"",
                         root,
-                        c"dumpcap.version",
+                        out_paths.version,
                         fs::AtFlags::EMPTY_PATH,
                     )?;
                     fs::linkat(
                         log_fd.as_fd(),
                         c"",
                         root,
-                        c"dumpcap.log",
+                        out_paths.log,
                         fs::AtFlags::EMPTY_PATH,
                     )?;
                     fs::linkat(
                         data_fd.as_fd(),
                         c"",
                         root,
-                        c"traffic.pcapng",
+                        out_paths.data,
                         fs::AtFlags::EMPTY_PATH,
                     )
                 })

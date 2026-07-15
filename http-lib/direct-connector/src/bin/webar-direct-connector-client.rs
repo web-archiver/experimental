@@ -79,7 +79,16 @@ fn main() -> anyhow::Result<()> {
     let rt = tokio::runtime::Runtime::new().context("failed to create runtime")?;
     let id = uuid::Uuid::new_v4();
     let client = if cli.capture {
-        rt.block_on(Client::new_capture_link(&cli.server, &id, root.as_fd()))
+        rt.block_on(Client::new_capture_link(
+            &cli.server,
+            &id,
+            root.as_fd(),
+            webar_direct_connector::client::OutputPath {
+                version: c"dumpcap.version",
+                log: c"dumpcap.log",
+                data: c"traffic.pcapng",
+            },
+        ))
     } else {
         rt.block_on(Client::new_no_capture(&cli.server, &id))
     }

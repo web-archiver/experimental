@@ -1,8 +1,12 @@
 // #![allow(unused)]
 
-use std::{os::fd::BorrowedFd, process::ExitCode, sync::Arc};
+use std::{
+    os::fd::{AsFd, BorrowedFd},
+    sync::Arc,
+};
 
 use anyhow::{Context as _, Result};
+use rustix::fs::{self, OFlags};
 use webar_core::{
     codec::gcbor::{self, ToGCbor},
     time::{TimePeriod, Timestamp},
@@ -14,7 +18,6 @@ pub mod http_client;
 pub mod log;
 pub mod object_store;
 mod tls;
-mod traffic;
 
 #[derive(ToGCbor)]
 struct Uname<'a> {
@@ -53,6 +56,7 @@ pub struct FetcherConfig<'a> {
     pub shared_blob_index: Option<&'a str>,
     pub shared_object_index: Option<&'a str>,
     pub cookie_store: Option<http_client::cookie::CookieStore>,
+    pub direct_capture_sock: &'a str,
 }
 
 fn run(
@@ -69,9 +73,15 @@ fn run(
     );
     let mut object_store = object_store::MakeStore::new(root, args.shared_object_index)
         .context("failed to create object store factory")?;
-    let mut http_client =
-        http_client::Client::new(root, Arc::clone(&blob_store), args.cookie_store)
-            .context("failed to init http client")?;
+    let mut http_client = http_client::Client::new(
+        root,
+        Arc::clone(&blob_store),
+        args.cookie_store,
+        &uuid,
+        &rt,
+        args.direct_capture_sock,
+    )
+    .context("failed to init http client")?;
     let un = rustix::system::uname();
     let uname_str = un
         .sysname()
@@ -126,7 +136,14 @@ pub fn run_fetcher(
     parent: &str,
     args: FetcherConfig<'_>,
     main: impl FnOnce(Context<'_>) -> anyhow::Result<()>,
-) -> ExitCode {
+) -> anyhow::Result<()> {
+    unsafe {
+        rustix::thread::unshare_unsafe(
+            rustix::thread::UnshareFlags::NEWUSER | rustix::thread::UnshareFlags::NEWNET,
+        )
+        .context("failed to create sandbox")?;
+    }
+
     let start_time = Timestamp::now();
     let uuid = uuid::Uuid::new_v7(uuid::Timestamp::from_unix(
         uuid::NoContext,
@@ -134,20 +151,24 @@ pub fn run_fetcher(
         start_time.nanos,
     ));
     let root_path = format!("{parent}/{uuid}");
-    unsafe {
-        traffic::dumpcap_main(&root_path, |root| {
-            if let Err(e) = log::init(root) {
-                return Err(e.context("failed to init tracing"));
-            }
-            tracing::info!(path = &root_path, "data will be saved to {root_path}");
-            tls::global_init();
-            match run(root, start_time, uuid, args, main) {
-                Ok(()) => Ok(()),
-                Err(e) => {
-                    tracing::error!(err = e.as_ref() as &dyn std::error::Error, "error: {e:?}");
-                    Err(e)
-                }
-            }
-        })
+    std::fs::create_dir_all(&root_path).context("failed to create root")?;
+    let root = fs::open(
+        &root_path,
+        OFlags::PATH | OFlags::DIRECTORY | OFlags::CLOEXEC,
+        fs::Mode::empty(),
+    )
+    .context("failed to open root dir")?;
+
+    if let Err(e) = log::init(root.as_fd()) {
+        return Err(e.context("failed to init tracing"));
+    }
+    tracing::info!(path = &root_path, "data will be saved to {root_path}");
+    tls::global_init();
+    match run(root.as_fd(), start_time, uuid, args, main) {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            tracing::error!(err = e.as_ref() as &dyn std::error::Error, "error: {e:?}");
+            Err(e)
+        }
     }
 }

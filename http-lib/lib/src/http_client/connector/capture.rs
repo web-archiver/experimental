@@ -1,18 +1,18 @@
-use std::{
-    ffi::CStr, future::Future, io::Write, marker::PhantomData, num::NonZeroU64, os::fd::BorrowedFd,
-    task::Poll,
-};
+use std::{ffi::CStr, future::Future, io::Write, num::NonZeroU64, os::fd::BorrowedFd, task::Poll};
 
 use webar_http_lib_core::utils::create_file;
 
-use crate::http_client::connector::ConnectionExt;
+use super::conn_meta::ConnectionMeta;
 
-pub trait Config<C> {
-    const TX_PATH: &'static CStr;
-    const TX_MAX_SIZE: Option<NonZeroU64>;
-    const RX_PATH: &'static CStr;
-    const RX_MAX_SIZE: Option<NonZeroU64>;
-    fn should_capture(conn: &C) -> bool;
+pub struct CaptureConfig {
+    pub tx_path: &'static CStr,
+    pub tx_max_size: Option<NonZeroU64>,
+    pub rx_path: &'static CStr,
+    pub rx_max_size: Option<NonZeroU64>,
+}
+
+pub trait Config<C>: Clone + Send {
+    fn capture_config(&self, conn: &C) -> Option<&CaptureConfig>;
 }
 
 #[derive(Debug)]
@@ -133,7 +133,7 @@ where
         hyper_util::client::legacy::connect::Connection::connected(&self.conn)
     }
 }
-impl<C: ConnectionExt> ConnectionExt for Connection<C> {
+impl<C: ConnectionMeta> ConnectionMeta for Connection<C> {
     fn uuid(&self) -> uuid::Uuid {
         self.conn.uuid()
     }
@@ -153,7 +153,7 @@ pub enum Error<E> {
 #[derive(Debug)]
 #[pin_project::pin_project]
 pub struct ConnectFuture<Cfg, F> {
-    _config: PhantomData<Cfg>,
+    config: Cfg,
     #[pin]
     inner: F,
 }
@@ -161,24 +161,25 @@ impl<Cfg, F, C, E> Future for ConnectFuture<Cfg, F>
 where
     Cfg: Config<C>,
     F: Future<Output = Result<C, E>>,
-    C: hyper_util::client::legacy::connect::Connection + ConnectionExt,
+    C: hyper_util::client::legacy::connect::Connection + ConnectionMeta,
 {
     type Output = Result<Connection<C>, Error<E>>;
     fn poll(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> Poll<Self::Output> {
-        match self.project().inner.poll(cx) {
+        let proj = self.project();
+        match proj.inner.poll(cx) {
             Poll::Pending => Poll::Pending,
             Poll::Ready(Ok(conn)) => {
                 let data_root = conn.data_root();
-                let (rx, tx) = if Cfg::should_capture(&conn) {
-                    match LimFile::open(data_root, Cfg::RX_PATH, Cfg::RX_MAX_SIZE).and_then(|rx| {
-                        let tx = LimFile::open(data_root, Cfg::TX_PATH, Cfg::TX_MAX_SIZE)?;
-                        Ok((rx, tx))
-                    }) {
+                let (rx, tx) = match proj.config.capture_config(&conn) {
+                    Some(cfg) => match LimFile::open(data_root, cfg.rx_path, cfg.rx_max_size)
+                        .and_then(|rx| {
+                            let tx = LimFile::open(data_root, cfg.tx_path, cfg.tx_max_size)?;
+                            Ok((rx, tx))
+                        }) {
                         Ok(v) => v,
                         Err(e) => return Poll::Ready(Err(Error::CreateFile(e))),
-                    }
-                } else {
-                    (LimFile::Done, LimFile::Done)
+                    },
+                    None => (LimFile::Done, LimFile::Done),
                 };
 
                 Poll::Ready(Ok(Connection { tx, rx, conn }))
@@ -191,14 +192,11 @@ where
 #[derive(Debug, Clone)]
 pub struct CaptureConnector<Cfg, S> {
     inner: S,
-    _cfg: PhantomData<Cfg>,
+    config: Cfg,
 }
 impl<Cfg, S> CaptureConnector<Cfg, S> {
-    pub fn new(inner: S) -> Self {
-        Self {
-            inner,
-            _cfg: PhantomData,
-        }
+    pub fn new(config: Cfg, inner: S) -> Self {
+        Self { inner, config }
     }
 }
 
@@ -206,7 +204,7 @@ impl<Cfg, R, S> tower::Service<R> for CaptureConnector<Cfg, S>
 where
     Cfg: Config<S::Response>,
     S: tower_service::Service<R>,
-    S::Response: hyper_util::client::legacy::connect::Connection + ConnectionExt,
+    S::Response: hyper_util::client::legacy::connect::Connection + ConnectionMeta,
 {
     type Error = Error<S::Error>;
     type Future = ConnectFuture<Cfg, S::Future>;
@@ -217,7 +215,7 @@ where
     fn call(&mut self, req: R) -> Self::Future {
         ConnectFuture {
             inner: self.inner.call(req),
-            _config: PhantomData,
+            config: self.config.clone(),
         }
     }
 }

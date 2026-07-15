@@ -99,12 +99,15 @@ impl Client {
         root: BorrowedFd<'_>,
         blob_store: Arc<BlobStore>,
         cookies: Option<cookie::CookieStore>,
+        fetch_id: &uuid::Uuid,
+        runtime: &tokio::runtime::Runtime,
+        connector_sock: &str,
     ) -> anyhow::Result<Self> {
         Ok(Self(http_service::DefaultService::new(
             root,
             blob_store,
             cookies.unwrap_or_default().0,
-            connector::DefaultConnector::new(root)?,
+            connector::DefaultConnector::new(root, runtime, fetch_id, connector_sock)?,
         )?))
     }
     pub fn request(&mut self, method: http::Method, uri: http::Uri) -> RequestBuilder {
