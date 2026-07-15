@@ -357,7 +357,19 @@ unsafe fn capture_main(sock_path: &str) -> anyhow::Result<ExitCode> {
                 }
             }
         }
-        Ok(capture::CaptureFork::ParentOf(child)) => child.wait(),
+        Ok(capture::CaptureFork::ParentOf(child)) => {
+            let _ = unsafe {
+                signal_hook_registry::register(
+                    tokio::signal::unix::SignalKind::interrupt().as_raw_value(),
+                    || {},
+                )
+            };
+
+            drop(init_stream);
+            drop(listener);
+
+            child.wait()
+        }
         Err(e) => {
             let e = e.context("failed to start capture");
             encode_error(&SerError::from(e.as_ref()), &mut err_buf);

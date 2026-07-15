@@ -1,6 +1,6 @@
 use std::{
     mem::MaybeUninit,
-    net::SocketAddr,
+    net::IpAddr,
     os::fd::{AsFd, BorrowedFd},
 };
 
@@ -221,8 +221,9 @@ impl Client {
     }
     pub fn connect_tcp_ip(
         &mut self,
-        ip: SocketAddr,
+        ip: IpAddr,
+        port: u16,
     ) -> impl Future<Output = Result<tokio::net::TcpStream, Error>> {
-        self.connect_tcp(ServerAddr::Ip(ip.ip()), ip.port())
+        self.connect_tcp(ServerAddr::Ip(ip), port)
     }
 }

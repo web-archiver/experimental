@@ -8,6 +8,7 @@ license.workspace = true
 default = ["server", "server_cli", "client", "client_cli"]
 server = [
   "dep:anyhow",
+  "dep:signal-hook-registry",
   "rustix/runtime",
   "rustix/process",
   "tokio/signal",
@@ -27,6 +28,7 @@ client_cli = [
 
 [dependencies]
 uuid.workspace = true
+signal-hook-registry = { version = "1.4.8", optional = true }
 tokio = { workspace = true, features = ["net", "macros", "io-util"] }
 rustix = { workspace = true, features = ["net"] }
 clap = { workspace = true, optional = true }

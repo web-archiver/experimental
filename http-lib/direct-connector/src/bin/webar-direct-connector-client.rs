@@ -1,8 +1,4 @@
-use std::{
-    net::{IpAddr, SocketAddr},
-    os::fd::AsFd,
-    str::FromStr,
-};
+use std::{net::IpAddr, os::fd::AsFd, str::FromStr};
 
 use anyhow::Context;
 use clap::Parser;
@@ -46,7 +42,7 @@ async fn listen_connection(
             Ok((mut unix_sock, _)) => {
                 let mut tcp_sock = match &addr {
                     ServerAddr::Domain(d) => client.connect_tcp_domain(d.as_str(), port).await,
-                    ServerAddr::Ip(ip) => client.connect_tcp_ip(SocketAddr::new(*ip, port)).await,
+                    ServerAddr::Ip(ip) => client.connect_tcp_ip(*ip, port).await,
                 }
                 .context("failed to connect to server")?;
                 tokio::task::spawn(async move {
