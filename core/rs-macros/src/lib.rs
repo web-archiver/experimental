@@ -26,6 +26,11 @@ pub fn derive_gcbor(input: TokenStream) -> TokenStream {
     gcbor::derive_gcbor(&quote!(webar_core), parse_macro_input!(input)).into()
 }
 
+#[proc_macro_derive(GcborCodecSelf, attributes(gcbor))]
+pub fn derive_gcbor_self(input: TokenStream) -> TokenStream {
+    gcbor::derive_gcbor(&quote!(crate), parse_macro_input!(input)).into()
+}
+
 #[proc_macro_derive(GCborOrd, attributes(gcbor))]
 pub fn derive_gcbor_ord(input: TokenStream) -> TokenStream {
     gcbor::derive_gcbor_ord(&quote!(webar_core), parse_macro_input!(input)).into()

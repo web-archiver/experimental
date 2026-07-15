@@ -6,7 +6,10 @@ use tracing_subscriber::registry::LookupSpan;
 use webar_core::{
     codec::gcbor::{
         map::GCborMap,
-        support::tracing::{DebugString, Error, OptValue, PrimValue, Wrapper},
+        support::{
+            error::{DebugString, Error},
+            tracing::{OptValue, PrimValue, Wrapper},
+        },
         EncodedVal, SomeType, ToGCbor, ValueBuf,
     },
     time::Timestamp,

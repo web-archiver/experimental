@@ -16,11 +16,12 @@ use crate::{
     codec::gcbor::{
         self,
         internal::encoding::{self, ToGCbor},
+        support::error::{DebugString, Error},
         to_vec, VecWriter,
     },
 };
 
-use super::{encode_type_header, DebugString, Wrapper};
+use super::{encode_type_header, Wrapper};
 
 enum EncSlice<'a> {
     EmptyL,
@@ -388,7 +389,7 @@ fn to_enc_value(v: &Value) -> EncValue {
             ret
         }
         Value::Error(e) => {
-            let mut ret = EncValue::singleton(&super::Error::from(*e));
+            let mut ret = EncValue::singleton(&Error::from(*e));
             ret.prepend_encoder(|mut enc| encode_type_header("Error", &mut enc));
             ret
         }

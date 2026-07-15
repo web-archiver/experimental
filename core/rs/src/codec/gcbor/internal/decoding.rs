@@ -178,6 +178,39 @@ impl<'buf> SliceDecoder<'buf> {
                 })
             })
     }
+    pub(crate) fn peek(&self, ty: TypeInfo) -> Result<Header, Error> {
+        struct Reader<'buf>(&'buf [u8]);
+        impl<'buf> Read for Reader<'buf> {
+            type Error = ReadError;
+            fn read_exact(&mut self, data: &mut [u8]) -> Result<(), Self::Error> {
+                match self.0.split_at_checked(data.len()) {
+                    Some((d, r)) => {
+                        data.copy_from_slice(d);
+                        self.0 = r;
+                        Ok(())
+                    }
+                    None => Err(ReadError {
+                        remaining: self.0.len(),
+                        read_size: data.len(),
+                    }),
+                }
+            }
+        }
+        ciborium_ll::Decoder::from(Reader(self.data))
+            .pull()
+            .map_err(|e| {
+                Error::from(match e {
+                    ciborium_ll::Error::Io(e) => InnerError {
+                        ty,
+                        kind: ErrorKind::Io(e),
+                    },
+                    ciborium_ll::Error::Syntax(o) => InnerError {
+                        ty,
+                        kind: ErrorKind::Cbor(self.offset + o),
+                    },
+                })
+            })
+    }
     pub(crate) fn read_bytes(&mut self, ty: TypeInfo, len: usize) -> Result<&'buf [u8], Error> {
         match self.data.split_at_checked(len) {
             Some((ret, rest)) => {
@@ -462,8 +495,8 @@ impl<'a, 'buf> ListDecoder<'a, 'buf> {
 pub trait FromGCbor<'buf>: Sized {
     fn decode(decoder: Decoder<'_, 'buf>) -> Result<Self, Error>;
 }
-pub trait FromGCborSlice: for<'buf> FromGCbor<'buf> {}
-impl<T> FromGCborSlice for T where T: for<'buf> FromGCbor<'buf> {}
+pub trait FromGCborOwned: for<'buf> FromGCbor<'buf> {}
+impl<T> FromGCborOwned for T where T: for<'buf> FromGCbor<'buf> {}
 
 impl<'buf> FromGCbor<'buf> for bool {
     fn decode(decoder: Decoder<'_, 'buf>) -> Result<Self, Error> {

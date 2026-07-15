@@ -11,7 +11,7 @@ reexport in that crate as a temporary measure.
 use std::{borrow::Borrow, convert::Infallible, fmt::Debug, marker::PhantomData, mem::transmute};
 
 #[doc(inline)]
-pub use self::internal::{cmp::GCborOrd, decoding::FromGCborSlice, encoding::ToGCbor};
+pub use self::internal::{cmp::GCborOrd, decoding::FromGCborOwned, encoding::ToGCbor};
 
 use ciborium_io::Write;
 /// Shorthand for deriving both [FromGCbor] and [ToGCbor]
@@ -49,6 +49,8 @@ pub mod internal {
 
 #[doc(hidden)]
 pub mod support {
+    pub mod direct_connector;
+    pub mod error;
     pub mod http;
     pub mod store;
     pub mod tls;
@@ -254,7 +256,7 @@ impl<'a, T: ?Sized> ToGCbor for ValueSlice<'a, T> {
 
 pub type DecodeSliceError = internal::decoding::Error;
 
-pub fn from_slice<T: FromGCborSlice>(slice: &[u8]) -> Result<T, DecodeSliceError> {
+pub fn from_slice<T: FromGCborOwned>(slice: &[u8]) -> Result<T, DecodeSliceError> {
     T::decode(internal::decoding::Decoder(
         &mut internal::decoding::SliceDecoder::new(slice),
     ))

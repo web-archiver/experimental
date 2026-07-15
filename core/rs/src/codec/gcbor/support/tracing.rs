@@ -1,6 +1,5 @@
 use ciborium_io::Write;
 use ciborium_ll::{simple, Header};
-use webar_core_macros::ToGCborSelf;
 
 use crate::codec::gcbor::{internal::encoding, GCborOrd, ToGCbor};
 
@@ -14,52 +13,6 @@ fn encode_type_header<W: Write>(
     encoder.push(Header::Array(Some(2)))?;
     encoder.push(Header::Text(Some(name.len())))?;
     encoder.write_all(name.as_bytes())
-}
-
-#[derive(ToGCborSelf)]
-pub struct DebugString {
-    default: String,
-    alt: String,
-}
-impl DebugString {
-    pub fn new<T: std::fmt::Debug + ?Sized>(v: &T) -> Self {
-        Self {
-            default: format!("{v:?}"),
-            alt: format!("{v:#?}"),
-        }
-    }
-}
-
-#[derive(webar_core_macros::ToGCborSelf)]
-struct ErrorSource {
-    debug: DebugString,
-    description: String,
-}
-#[derive(webar_core_macros::ToGCborSelf)]
-pub struct Error {
-    debug: DebugString,
-    description: String,
-    sources: Vec<ErrorSource>,
-}
-impl From<&dyn std::error::Error> for Error {
-    fn from(mut err: &dyn std::error::Error) -> Self {
-        let debug = DebugString::new(err);
-        let description = err.to_string();
-
-        let mut sources = Vec::new();
-        while let Some(e) = err.source() {
-            sources.push(ErrorSource {
-                debug: DebugString::new(err),
-                description: e.to_string(),
-            });
-            err = e;
-        }
-        Self {
-            debug,
-            description,
-            sources,
-        }
-    }
 }
 
 /// Wrapper types to avoid exposing trait implementations to other code

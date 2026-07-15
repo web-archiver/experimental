@@ -1,0 +1,43 @@
+[package]
+name = "webar-direct-connector"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+
+[features]
+default = ["server", "server_cli", "client", "client_cli"]
+server = [
+  "dep:anyhow",
+  "rustix/runtime",
+  "rustix/process",
+  "tokio/signal",
+  "tokio/rt-multi-thread",
+]
+server_cli = ["server", "dep:clap"]
+client = []
+client_cli = [
+  "client",
+  "dep:clap",
+  "dep:anyhow",
+  "tokio/signal",
+  "tokio/rt-multi-thread",
+  "uuid/v4",
+  "rustix/thread",
+]
+
+[dependencies]
+uuid.workspace = true
+tokio = { workspace = true, features = ["net", "macros", "io-util"] }
+rustix = { workspace = true, features = ["net"] }
+clap = { workspace = true, optional = true }
+anyhow = { workspace = true, optional = true }
+thiserror.workspace = true
+webar-core.workspace = true
+
+[[bin]]
+name = "webar-direct-connector"
+required-features = ["server_cli"]
+
+[[bin]]
+name = "webar-direct-connector-client"
+required-features = ["client_cli"]
