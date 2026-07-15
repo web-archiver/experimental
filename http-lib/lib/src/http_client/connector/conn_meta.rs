@@ -1,5 +1,5 @@
 use std::{
-    os::fd::{AsFd, OwnedFd},
+    os::fd::{AsFd, BorrowedFd, OwnedFd},
     sync::Arc,
     task::Poll,
 };
@@ -159,11 +159,17 @@ pub struct ConnMetaService<S> {
     inner: S,
 }
 impl<S> ConnMetaService<S> {
-    pub(crate) fn new(log_root: OwnedFd, inner: S) -> Self {
-        Self {
-            log_root: Arc::new(log_root),
+    pub(crate) fn with_connector(
+        root: BorrowedFd<'_>,
+        inner: S,
+    ) -> Result<Self, rustix::io::Errno> {
+        Ok(Self {
+            log_root: Arc::new(webar_http_lib_core::utils::open_new_dir(
+                root,
+                c"connection",
+            )?),
             inner,
-        }
+        })
     }
 }
 impl<S, R> tower_service::Service<R> for ConnMetaService<S>

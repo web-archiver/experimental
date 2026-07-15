@@ -107,7 +107,12 @@ impl Client {
             root,
             blob_store,
             cookies.unwrap_or_default().0,
-            connector::DefaultConnector::new(root, runtime, fetch_id, connector_sock)?,
+            connector::DefaultConnector::new_direct_captured(
+                root,
+                runtime,
+                fetch_id,
+                connector_sock,
+            )?,
         )?))
     }
     pub fn request(&mut self, method: http::Method, uri: http::Uri) -> RequestBuilder {

@@ -1,4 +1,4 @@
-use std::{net::IpAddr, pin::Pin, str::FromStr, sync::Arc, task::Poll};
+use std::{net::IpAddr, os::fd::BorrowedFd, pin::Pin, str::FromStr, sync::Arc, task::Poll};
 
 use hyper_util::rt::TokioIo;
 
@@ -42,10 +42,26 @@ pub struct TcpConnector {
     client: Arc<tokio::sync::Mutex<Client>>,
 }
 impl TcpConnector {
-    pub(crate) fn from_client(client: Client) -> Self {
-        Self {
+    pub(crate) fn new_root_captured(
+        root: BorrowedFd<'_>,
+        fetcher_id: &uuid::Uuid,
+        rt: &tokio::runtime::Runtime,
+        socket_path: &str,
+    ) -> anyhow::Result<Self> {
+        webar_http_lib_core::utils::create_dir(root, c"dumpcap")?;
+        let client = rt.block_on(webar_direct_connector::client::Client::new_capture_link(
+            socket_path,
+            fetcher_id,
+            root,
+            webar_direct_connector::client::OutputPath {
+                version: c"dumpcap/dumpcap.version",
+                log: c"dumpcap/dumpcap.log",
+                data: c"dumpcap/traffic.pcapng",
+            },
+        ))?;
+        Ok(Self {
             client: Arc::new(tokio::sync::Mutex::new(client)),
-        }
+        })
     }
 }
 impl tower_service::Service<http::Uri> for TcpConnector {

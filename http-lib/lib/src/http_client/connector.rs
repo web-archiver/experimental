@@ -3,8 +3,6 @@ use std::os::fd::BorrowedFd;
 use anyhow::Context as _;
 use tower::Service;
 
-use webar_http_lib_core::utils::{create_dir, open_new_dir};
-
 #[derive(Clone)]
 pub struct ConnMeta {
     pub(crate) uuid: uuid::Uuid,
@@ -29,36 +27,28 @@ type DefaultInner = capture::CaptureConnector<
 #[derive(Debug, Clone)]
 pub struct DefaultConnector(DefaultInner);
 impl DefaultConnector {
-    pub(crate) fn new(
+    pub(crate) fn new_direct_captured(
         root: BorrowedFd<'_>,
         runtime: &tokio::runtime::Runtime,
         fetcher_id: &uuid::Uuid,
         direct_connector_sock: &str,
     ) -> anyhow::Result<Self> {
-        let log_root = open_new_dir(root, c"connection")?;
-        create_dir(root, c"dumpcap")?;
-        let tcp_connector = runtime
-            .block_on(webar_direct_connector::client::Client::new_capture_link(
-                direct_connector_sock,
-                fetcher_id,
-                root,
-                webar_direct_connector::client::OutputPath {
-                    version: c"dumpcap/dumpcap.version",
-                    log: c"dumpcap/dumpcap.log",
-                    data: c"dumpcap/traffic.pcapng",
-                },
-            ))
-            .context("failed to init tcp connector")?;
         Ok(Self(capture::CaptureConnector::new(
             tls::CaptureMaybeHttpsHandshake,
             tls::MaybeHttpsConnector::new(
                 root,
                 capture::CaptureConnector::new(
                     tcp::CaptureHandshake,
-                    tcp::TcpConnector::new(conn_meta::ConnMetaService::new(
-                        log_root,
-                        direct::TcpConnector::from_client(tcp_connector),
-                    )),
+                    tcp::TcpConnector::new(conn_meta::ConnMetaService::with_connector(
+                        root,
+                        direct::TcpConnector::new_root_captured(
+                            root,
+                            fetcher_id,
+                            runtime,
+                            direct_connector_sock,
+                        )
+                        .context("failed to init connector")?,
+                    )?),
                 ),
             )?,
         )))
