@@ -15,6 +15,7 @@ use webar_http_lib_core::utils::create_file;
 
 pub mod blob;
 pub mod http_client;
+pub mod local_id;
 pub mod log;
 pub mod object_store;
 mod tls;
@@ -95,9 +96,11 @@ fn run(
     );
     let mut object_store = object_store::MakeStore::new(root, cfgs.shared_object_index)
         .context("failed to create object store factory")?;
+    let id_generator = local_id::IdGenerator::new();
     let mut http_client = match args.primary_connector {
         Connector::TcpDirect { connector_socket } => http_client::Client::new_direct(
             root,
+            id_generator,
             Arc::clone(&blob_store),
             cfgs.cookie_store,
             &uuid,
@@ -107,6 +110,7 @@ fn run(
         ),
         Connector::HttpTunnel { tunnel_socket } => http_client::Client::new_proxy(
             root,
+            id_generator,
             Arc::clone(&blob_store),
             cfgs.cookie_store,
             cfgs.primary_connector_capture,

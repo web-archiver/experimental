@@ -4,7 +4,7 @@ const CAPTURE_HANDSHAKE_SIZE: u64 = 512 * 1024;
 
 #[derive(Clone)]
 pub struct ConnMeta {
-    pub(crate) uuid: uuid::Uuid,
+    pub(crate) local_id: crate::local_id::LocalId,
 }
 
 mod capture;

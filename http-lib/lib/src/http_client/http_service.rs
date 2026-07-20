@@ -63,6 +63,7 @@ pub struct DefaultService<C>(DefaultInner<C>);
 impl<C> DefaultService<C> {
     pub(crate) fn new(
         root: BorrowedFd<'_>,
+        id_generator: crate::local_id::IdGenerator,
         blob_store: Arc<crate::blob::BlobStore>,
         cookies: cookie_store::CookieStore,
         connector: C,
@@ -75,6 +76,7 @@ impl<C> DefaultService<C> {
             decompress::Decompress::new(browser_header::BrowserHeaderService::new(
                 record::RecordService::new(
                     root,
+                    id_generator,
                     blob_store,
                     timing::TimingService::new(
                         hyper_util::client::legacy::Builder::new(

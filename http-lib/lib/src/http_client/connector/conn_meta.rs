@@ -10,14 +10,16 @@ use webar_core::{
 };
 use webar_http_lib_core::utils::{open_new_dir, write_file};
 
+use crate::local_id::LocalId;
+
 pub trait ConnectionMeta {
-    fn uuid(&self) -> uuid::Uuid;
+    fn local_id(&self) -> LocalId;
     fn data_root(&self) -> std::os::fd::BorrowedFd<'_>;
 }
 
 #[pin_project::pin_project]
 pub struct WithMeta<C> {
-    uuid: uuid::Uuid,
+    id: LocalId,
     data_root: OwnedFd,
     #[pin]
     pub(crate) conn: C,
@@ -69,12 +71,12 @@ where
     fn connected(&self) -> hyper_util::client::legacy::connect::Connected {
         self.conn
             .connected()
-            .extra(super::ConnMeta { uuid: self.uuid })
+            .extra(super::ConnMeta { local_id: self.id })
     }
 }
 impl<C> ConnectionMeta for WithMeta<C> {
-    fn uuid(&self) -> uuid::Uuid {
-        self.uuid
+    fn local_id(&self) -> LocalId {
+        self.id
     }
     fn data_root(&self) -> std::os::fd::BorrowedFd<'_> {
         self.data_root.as_fd()
@@ -83,7 +85,7 @@ impl<C> ConnectionMeta for WithMeta<C> {
 
 #[derive(ToGCbor)]
 struct MetaInfo {
-    uuid: uuid::Uuid,
+    id: LocalId,
     start_timestamp: Timestamp,
 }
 
@@ -97,6 +99,7 @@ pub enum Error<E> {
 
 #[pin_project::pin_project]
 pub struct ConnectFuture<F> {
+    local_id: LocalId,
     log_root: Arc<OwnedFd>,
     #[pin]
     inner: F,
@@ -113,9 +116,9 @@ where
         match self.as_mut().project().inner.poll(cx) {
             Poll::Pending => Poll::Pending,
             Poll::Ready(Ok(conn)) => {
-                let uuid = uuid::Uuid::new_v4();
-                let mut dir_buf = [0; uuid::fmt::Hyphenated::LENGTH + 1];
-                uuid.as_hyphenated().encode_lower(&mut dir_buf);
+                let id = self.local_id;
+                let mut dir_buf = [0; LocalId::FORMAT_LEN + 1];
+                id.format_buf(dir_buf.first_chunk_mut().unwrap());
                 match open_new_dir(
                     self.log_root.as_fd(),
                     std::ffi::CStr::from_bytes_with_nul(&dir_buf).unwrap(),
@@ -125,7 +128,7 @@ where
                         dir.as_fd(),
                         c"meta.bin",
                         &gcbor::to_vec(&MetaInfo {
-                            uuid,
+                            id,
                             start_timestamp: Timestamp::now(),
                         }),
                     )?;
@@ -133,7 +136,7 @@ where
                     Ok(dir)
                 }) {
                     Ok(data_root) => Poll::Ready(Ok(WithMeta {
-                        uuid,
+                        id,
                         data_root,
                         conn,
                     })),
@@ -147,12 +150,14 @@ where
 
 #[derive(Debug, Clone)]
 pub struct ConnMetaService<S> {
+    id_generator: crate::local_id::IdGenerator,
     log_root: Arc<OwnedFd>,
     inner: S,
 }
 impl<S> ConnMetaService<S> {
     pub(crate) fn with_connector(
         root: BorrowedFd<'_>,
+        id_generator: crate::local_id::IdGenerator,
         inner: S,
     ) -> Result<Self, rustix::io::Errno> {
         Ok(Self {
@@ -160,6 +165,7 @@ impl<S> ConnMetaService<S> {
                 root,
                 c"connection",
             )?),
+            id_generator,
             inner,
         })
     }
@@ -176,6 +182,7 @@ where
     }
     fn call(&mut self, req: R) -> Self::Future {
         ConnectFuture {
+            local_id: self.id_generator.generate(),
             log_root: Arc::clone(&self.log_root),
             inner: self.inner.call(req),
         }

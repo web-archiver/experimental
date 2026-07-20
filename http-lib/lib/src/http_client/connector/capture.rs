@@ -143,8 +143,8 @@ where
     }
 }
 impl<C: ConnectionMeta> ConnectionMeta for Connection<C> {
-    fn uuid(&self) -> uuid::Uuid {
-        self.conn.uuid()
+    fn local_id(&self) -> crate::local_id::LocalId {
+        self.conn.local_id()
     }
     fn data_root(&self) -> BorrowedFd<'_> {
         self.conn.data_root()

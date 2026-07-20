@@ -97,6 +97,7 @@ pub struct Client(http_service::DefaultService<connector::DefaultConnector>);
 impl Client {
     pub(crate) fn new_direct(
         root: BorrowedFd<'_>,
+        id_generator: crate::local_id::IdGenerator,
         blob_store: Arc<BlobStore>,
         cookies: Option<cookie::CookieStore>,
         fetcher_id: &uuid::Uuid,
@@ -106,11 +107,13 @@ impl Client {
     ) -> anyhow::Result<Self> {
         Ok(Self(http_service::DefaultService::new(
             root,
+            id_generator.clone(),
             blob_store,
             cookies.unwrap_or_default().0,
             connector::DefaultConnector::new_direct(
                 root,
                 runtime,
+                id_generator,
                 fetcher_id,
                 capture,
                 connector_sock,
@@ -119,6 +122,7 @@ impl Client {
     }
     pub(crate) fn new_proxy(
         root: BorrowedFd<'_>,
+        id_generator: crate::local_id::IdGenerator,
         blob_store: Arc<BlobStore>,
         cookies: Option<cookie::CookieStore>,
         capture: bool,
@@ -126,9 +130,15 @@ impl Client {
     ) -> anyhow::Result<Self> {
         Ok(Self(http_service::DefaultService::new(
             root,
+            id_generator.clone(),
             blob_store,
             cookies.unwrap_or_default().0,
-            connector::DefaultConnector::new_proxy_captured(root, capture, proxy_sock)?,
+            connector::DefaultConnector::new_proxy_captured(
+                root,
+                id_generator,
+                capture,
+                proxy_sock,
+            )?,
         )?))
     }
     pub fn request(&mut self, method: http::Method, uri: http::Uri) -> RequestBuilder {

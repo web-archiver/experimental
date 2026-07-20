@@ -157,7 +157,7 @@ impl Connection {
         });
         if let Err(e) = self.event_log.write_all(v.as_bytes()) {
             tracing::error!(
-                conn = %self.conn.uuid(),
+                conn = tracing::field::valuable(&self.conn.local_id()),
                 err = &e as &dyn std::error::Error,
                 "failed to write event: {e}"
             );
@@ -181,7 +181,7 @@ impl Connection {
             {
                 let e = std::io::Error::last_os_error();
                 tracing::error!(
-                    conn = %self.conn.uuid(),
+                    conn = tracing::field::valuable(&self.conn.local_id()),
                     err = &e as &dyn std::error::Error,
                     "failed to get tcp connection info: {e}"
                 );
@@ -202,7 +202,7 @@ impl Connection {
     fn write_status(&mut self) {
         if let Err(e) = self.try_write_status() {
             tracing::error!(
-                conn = %self.conn.uuid(),
+                conn = tracing::field::valuable(&self.conn.local_id()),
                 error = &e as &dyn std::error::Error,
                 "failed to write status",
             );
@@ -270,8 +270,8 @@ impl hyper_util::client::legacy::connect::Connection for Connection {
     }
 }
 impl ConnectionMeta for Connection {
-    fn uuid(&self) -> uuid::Uuid {
-        self.conn.uuid()
+    fn local_id(&self) -> crate::local_id::LocalId {
+        self.conn.local_id()
     }
     fn data_root(&self) -> std::os::fd::BorrowedFd<'_> {
         self.conn.data_root()

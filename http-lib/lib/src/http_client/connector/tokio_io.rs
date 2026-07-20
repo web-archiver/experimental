@@ -5,8 +5,8 @@ use hyper_util::rt::TokioIo;
 use super::conn_meta::ConnectionMeta;
 
 impl<C: ConnectionMeta> ConnectionMeta for TokioIo<C> {
-    fn uuid(&self) -> uuid::Uuid {
-        self.inner().uuid()
+    fn local_id(&self) -> crate::local_id::LocalId {
+        self.inner().local_id()
     }
     fn data_root(&self) -> std::os::fd::BorrowedFd<'_> {
         self.inner().data_root()

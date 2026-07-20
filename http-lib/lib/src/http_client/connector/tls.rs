@@ -128,18 +128,18 @@ where
     }
 }
 impl<T: ConnectionMeta> ConnectionMeta for tokio_rustls::client::TlsStream<T> {
-    fn uuid(&self) -> uuid::Uuid {
-        self.get_ref().0.uuid()
+    fn local_id(&self) -> crate::local_id::LocalId {
+        self.get_ref().0.local_id()
     }
     fn data_root(&self) -> BorrowedFd<'_> {
         self.get_ref().0.data_root()
     }
 }
 impl<T: ConnectionMeta> ConnectionMeta for MaybeHttpsStream<T> {
-    fn uuid(&self) -> uuid::Uuid {
+    fn local_id(&self) -> crate::local_id::LocalId {
         match self {
-            Self::Http(c) => c.uuid(),
-            Self::Https(c) => c.uuid(),
+            Self::Http(c) => c.local_id(),
+            Self::Https(c) => c.local_id(),
         }
     }
     fn data_root(&self) -> BorrowedFd<'_> {

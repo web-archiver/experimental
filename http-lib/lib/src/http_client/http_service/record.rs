@@ -20,7 +20,7 @@ use crate::{blob::BlobStore, http_client::compressible};
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, GCborCodec)]
 #[gcbor(transparent)]
-pub struct MessageId(uuid::Uuid);
+pub struct MessageId(crate::local_id::LocalId);
 
 #[derive(ToGCbor)]
 enum RequestId {
@@ -44,7 +44,7 @@ fn from_header_map<'a>(mp: &'a http::header::HeaderMap) -> HeaderMap<'a> {
 
 #[derive(ToGCbor)]
 struct Connection {
-    uuid: uuid::Uuid,
+    id: crate::local_id::LocalId,
 }
 
 #[derive(ToGCbor, valuable::Valuable)]
@@ -117,7 +117,7 @@ impl<R: super::Response> super::Response for RecordResponse<R> {
 
 #[pin_project::pin_project]
 pub struct RecordFuture<F> {
-    id: uuid::Uuid,
+    id: crate::local_id::LocalId,
     request: EncodedVal<SomeType>,
     request_body: Option<RequestBody>,
     blob_store: Arc<BlobStore>,
@@ -155,12 +155,12 @@ impl<F> RecordFuture<F> {
         let msg = Message {
             id: MessageId(self.id),
             connection: Connection {
-                uuid: resp
+                id: resp
                     .parts
                     .extensions
                     .get::<crate::http_client::connector::ConnMeta>()
                     .unwrap()
-                    .uuid,
+                    .local_id,
             },
             timing: &resp.timing,
             request: &self.request,
@@ -209,6 +209,7 @@ where
 
 #[derive(Clone)]
 pub struct RecordService<S> {
+    id_generator: crate::local_id::IdGenerator,
     uri_buf: String,
     blob_store: Arc<BlobStore>,
     state: Arc<Mutex<State>>,
@@ -217,12 +218,14 @@ pub struct RecordService<S> {
 impl<S> RecordService<S> {
     pub(crate) fn new(
         root: BorrowedFd<'_>,
+        id_generator: crate::local_id::IdGenerator,
         blob_store: Arc<BlobStore>,
         inner: S,
     ) -> Result<Self, rustix::io::Errno> {
         let log_file = create_file(root, c"http_record.bin")?;
         Ok(Self {
             uri_buf: String::new(),
+            id_generator,
             blob_store,
             state: Arc::new(Mutex::new(State {
                 log_file: log_file.into(),
@@ -247,12 +250,19 @@ where
         self.inner.poll_ready(cx).map_err(Error::Inner)
     }
     fn call(&mut self, mut req: http::Request<super::ReqBody>) -> Self::Future {
-        let id = uuid::Uuid::new_v4();
+        let id = self.id_generator.generate();
         let mut buf = [0; uuid::fmt::Hyphenated::LENGTH];
 
+        let req_id = uuid::Uuid::new_v8({
+            let mut ret = [0; 16];
+            let id_bytes = id.as_u64().to_be_bytes();
+            *ret.first_chunk_mut().unwrap() = id_bytes;
+            *ret.last_chunk_mut().unwrap() = id_bytes;
+            ret
+        });
         req.headers_mut().insert(
             const { http::HeaderName::from_static("x-request-id") },
-            http::HeaderValue::from_str(id.as_hyphenated().encode_lower(&mut buf)).unwrap(),
+            http::HeaderValue::from_str(req_id.as_hyphenated().encode_lower(&mut buf)).unwrap(),
         );
 
         self.uri_buf.clear();
@@ -272,7 +282,7 @@ where
             data: b.clone(),
         });
         let req_info = Request {
-            id: RequestId::XRequestId(id),
+            id: RequestId::XRequestId(req_id),
             method: req.method().as_str(),
             url: &self.uri_buf,
             headers: from_header_map(req.headers()),

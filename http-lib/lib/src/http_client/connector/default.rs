@@ -122,8 +122,8 @@ impl hyper_util::client::legacy::connect::Connection for BaseConn {
     }
 }
 impl conn_meta::ConnectionMeta for BaseConn {
-    fn uuid(&self) -> uuid::Uuid {
-        forward_conn!(self, uuid())
+    fn local_id(&self) -> crate::local_id::LocalId {
+        forward_conn!(self, local_id())
     }
     fn data_root(&self) -> std::os::fd::BorrowedFd<'_> {
         forward_conn!(self, data_root())
@@ -262,6 +262,7 @@ impl DefaultConnector {
     pub(crate) fn new_direct(
         root: BorrowedFd<'_>,
         runtime: &tokio::runtime::Runtime,
+        id_generator: crate::local_id::IdGenerator,
         fetcher_id: &uuid::Uuid,
         capture: bool,
         direct_connector_sock: &str,
@@ -283,6 +284,7 @@ impl DefaultConnector {
                     BaseConnector::TcpDirect(tcp_log::TcpLogService::new(
                         conn_meta::ConnMetaService::with_connector(
                             root,
+                            id_generator,
                             tokio_io::TokioIoService(
                                 if capture {
                                     direct::TcpConnector::new_root_captured(
@@ -308,6 +310,7 @@ impl DefaultConnector {
     }
     pub(crate) fn new_proxy_captured(
         root: BorrowedFd<'_>,
+        id_generator: crate::local_id::IdGenerator,
         capture: bool,
         proxy_sock: &str,
     ) -> anyhow::Result<Self> {
@@ -327,6 +330,7 @@ impl DefaultConnector {
                     }),
                     BaseConnector::HttpTunnel(conn_meta::ConnMetaService::with_connector(
                         root,
+                        id_generator,
                         hyper_util::client::legacy::connect::proxy::Tunnel::new(
                             http::Uri::from_static("http://localhost"),
                             tokio_io::TokioIoService(
