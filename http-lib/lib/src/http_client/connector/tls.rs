@@ -1,4 +1,4 @@
-use std::{future::Future, os::fd::BorrowedFd, sync::Arc, task::Poll};
+use std::{ffi::CStr, future::Future, os::fd::BorrowedFd, sync::Arc, task::Poll};
 
 use hyper::rt::{Read, Write};
 use hyper_rustls::MaybeHttpsStream;
@@ -13,22 +13,54 @@ use webar_http_lib_core::utils::write_file;
 
 use super::conn_meta::ConnectionMeta;
 
+const TX_DATA_FILE: &CStr = c"tls_tx_data.bin";
+const RX_DATA_FILE: &CStr = c"tls_rx_data.bin";
+
 #[derive(Debug, Clone)]
 pub struct CaptureMaybeHttpsHandshake;
+impl CaptureMaybeHttpsHandshake {
+    pub const CONFIG: super::capture::CaptureConfig = super::capture::CaptureConfig {
+        rx_path: RX_DATA_FILE,
+        rx_max_size: std::num::NonZeroU64::new(super::CAPTURE_HANDSHAKE_SIZE),
+        tx_path: TX_DATA_FILE,
+        tx_max_size: std::num::NonZeroU64::new(super::CAPTURE_HANDSHAKE_SIZE),
+    };
+}
 impl<T> super::capture::Config<MaybeHttpsStream<T>> for CaptureMaybeHttpsHandshake {
     fn capture_config(&self, conn: &MaybeHttpsStream<T>) -> Option<&super::capture::CaptureConfig> {
         match conn {
             MaybeHttpsStream::Http(_) => None,
-            MaybeHttpsStream::Https(_) => Some(
-                &const {
-                    super::capture::CaptureConfig {
-                        rx_path: c"tls_rx_data.bin",
-                        rx_max_size: std::num::NonZeroU64::new(512 * 1024),
-                        tx_path: c"tls_tx_data.bin",
-                        tx_max_size: std::num::NonZeroU64::new(512 * 1024),
-                    }
-                },
-            ),
+            MaybeHttpsStream::Https(_) => Some(&Self::CONFIG),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct CaptureMaybeHttpsAll;
+impl CaptureMaybeHttpsAll {
+    pub const CONFIG: super::capture::CaptureConfig = super::capture::CaptureConfig {
+        rx_path: RX_DATA_FILE,
+        rx_max_size: None,
+        tx_path: TX_DATA_FILE,
+        tx_max_size: None,
+    };
+}
+impl<T> super::capture::Config<MaybeHttpsStream<T>> for CaptureMaybeHttpsAll {
+    fn capture_config(&self, conn: &MaybeHttpsStream<T>) -> Option<&super::capture::CaptureConfig> {
+        match conn {
+            MaybeHttpsStream::Http(_) => None,
+            MaybeHttpsStream::Https(_) => Some(&Self::CONFIG),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct CaptureMaybeHttpsRef<'a>(pub &'a super::capture::CaptureConfig);
+impl<'a, T> super::capture::Config<MaybeHttpsStream<T>> for CaptureMaybeHttpsRef<'a> {
+    fn capture_config(&self, conn: &MaybeHttpsStream<T>) -> Option<&super::capture::CaptureConfig> {
+        match conn {
+            MaybeHttpsStream::Http(_) => None,
+            MaybeHttpsStream::Https(_) => Some(self.0),
         }
     }
 }

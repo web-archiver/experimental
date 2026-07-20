@@ -4,6 +4,7 @@ use webar_http_lib_core::utils::create_file;
 
 use super::conn_meta::ConnectionMeta;
 
+#[derive(Debug, Clone)]
 pub struct CaptureConfig {
     pub tx_path: &'static CStr,
     pub tx_max_size: Option<NonZeroU64>,
@@ -13,6 +14,14 @@ pub struct CaptureConfig {
 
 pub trait Config<C>: Clone + Send {
     fn capture_config(&self, conn: &C) -> Option<&CaptureConfig>;
+}
+
+#[derive(Debug, Clone)]
+pub struct RefConfig<'a>(pub &'a CaptureConfig);
+impl<C> Config<C> for RefConfig<'_> {
+    fn capture_config(&self, _: &C) -> Option<&CaptureConfig> {
+        Some(self.0)
+    }
 }
 
 #[derive(Debug)]

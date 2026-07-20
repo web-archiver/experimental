@@ -1,7 +1,5 @@
 use std::{net::IpAddr, os::fd::BorrowedFd, pin::Pin, str::FromStr, sync::Arc, task::Poll};
 
-use hyper_util::rt::TokioIo;
-
 use webar_direct_connector::client::{self, Client};
 
 #[derive(Debug, thiserror::Error)]
@@ -25,13 +23,10 @@ impl From<InnerError> for Error {
 
 #[pin_project::pin_project]
 pub struct TcpConnectFuture(
-    #[pin]
-    Pin<
-        Box<dyn std::future::Future<Output = Result<TokioIo<tokio::net::TcpStream>, Error>> + Send>,
-    >,
+    #[pin] Pin<Box<dyn std::future::Future<Output = Result<tokio::net::TcpStream, Error>> + Send>>,
 );
 impl std::future::Future for TcpConnectFuture {
-    type Output = Result<TokioIo<tokio::net::TcpStream>, Error>;
+    type Output = Result<tokio::net::TcpStream, Error>;
     fn poll(self: Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> Poll<Self::Output> {
         self.project().0.poll(cx)
     }
@@ -63,9 +58,22 @@ impl TcpConnector {
             client: Arc::new(tokio::sync::Mutex::new(client)),
         })
     }
+    pub(crate) fn new_no_capture(
+        fetcher_id: &uuid::Uuid,
+        rt: &tokio::runtime::Runtime,
+        socket_path: &str,
+    ) -> anyhow::Result<Self> {
+        let client = rt.block_on(webar_direct_connector::client::Client::new_no_capture(
+            socket_path,
+            fetcher_id,
+        ))?;
+        Ok(Self {
+            client: Arc::new(tokio::sync::Mutex::new(client)),
+        })
+    }
 }
 impl tower_service::Service<http::Uri> for TcpConnector {
-    type Response = TokioIo<tokio::net::TcpStream>;
+    type Response = tokio::net::TcpStream;
     type Error = Error;
     type Future = TcpConnectFuture;
     fn poll_ready(&mut self, _: &mut std::task::Context<'_>) -> Poll<Result<(), Self::Error>> {
@@ -89,7 +97,7 @@ impl tower_service::Service<http::Uri> for TcpConnector {
                 .trim_end_matches(']');
 
             let mut client = client.lock().await;
-            Ok(TokioIo::new(match IpAddr::from_str(host) {
+            Ok(match IpAddr::from_str(host) {
                 Ok(ip) => client
                     .connect_tcp_ip(ip, port)
                     .await
@@ -98,7 +106,7 @@ impl tower_service::Service<http::Uri> for TcpConnector {
                     .connect_tcp_domain(host, port)
                     .await
                     .map_err(InnerError::Client)?,
-            }))
+            })
         }))
     }
 }

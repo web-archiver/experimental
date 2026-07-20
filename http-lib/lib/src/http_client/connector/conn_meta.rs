@@ -14,14 +14,6 @@ pub trait ConnectionMeta {
     fn uuid(&self) -> uuid::Uuid;
     fn data_root(&self) -> std::os::fd::BorrowedFd<'_>;
 }
-impl<C: ConnectionMeta> ConnectionMeta for hyper_util::rt::TokioIo<C> {
-    fn uuid(&self) -> uuid::Uuid {
-        self.inner().uuid()
-    }
-    fn data_root(&self) -> std::os::fd::BorrowedFd<'_> {
-        self.inner().data_root()
-    }
-}
 
 #[pin_project::pin_project]
 pub struct WithMeta<C> {

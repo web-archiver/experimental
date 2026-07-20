@@ -1,4 +1,5 @@
 use std::{
+    ffi::CStr,
     future::Future,
     io::Write as _,
     mem::MaybeUninit,
@@ -22,22 +23,39 @@ use webar_http_lib_core::utils::{create_file, write_file};
 use super::conn_meta::ConnectionMeta;
 
 const STATUS_DURATION: Duration = Duration::from_millis(128);
+const TX_DATA_FILE: &CStr = c"tcp_tx_data.bin";
+const RX_DATA_FILE: &CStr = c"tcp_rx_data.bin";
 
 #[derive(Debug, Clone)]
 pub struct CaptureHandshake;
+impl CaptureHandshake {
+    pub const CONFIG: super::capture::CaptureConfig = super::capture::CaptureConfig {
+        rx_path: RX_DATA_FILE,
+        rx_max_size: std::num::NonZeroU64::new(super::CAPTURE_HANDSHAKE_SIZE),
+        tx_path: TX_DATA_FILE,
+        tx_max_size: std::num::NonZeroU64::new(super::CAPTURE_HANDSHAKE_SIZE),
+    };
+}
 impl super::capture::Config<Connection> for CaptureHandshake {
     #[inline]
     fn capture_config(&self, _: &Connection) -> Option<&super::capture::CaptureConfig> {
-        Some(
-            &const {
-                super::capture::CaptureConfig {
-                    rx_max_size: std::num::NonZeroU64::new(512 * 1024),
-                    rx_path: c"tcp_rx_data.bin",
-                    tx_max_size: std::num::NonZeroU64::new(512 * 1024),
-                    tx_path: c"tcp_tx_data.bin",
-                }
-            },
-        )
+        Some(&Self::CONFIG)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct CaptureAll;
+impl CaptureAll {
+    pub const CONFIG: super::capture::CaptureConfig = super::capture::CaptureConfig {
+        rx_path: RX_DATA_FILE,
+        rx_max_size: None,
+        tx_path: TX_DATA_FILE,
+        tx_max_size: None,
+    };
+}
+impl super::capture::Config<Connection> for CaptureAll {
+    fn capture_config(&self, _: &Connection) -> Option<&super::capture::CaptureConfig> {
+        Some(&Self::CONFIG)
     }
 }
 
@@ -340,15 +358,15 @@ where
 }
 
 #[derive(Debug, Clone)]
-pub struct TcpConnector<S> {
+pub struct TcpLogService<S> {
     inner: S,
 }
-impl<S> TcpConnector<S> {
+impl<S> TcpLogService<S> {
     pub(crate) fn new(inner: S) -> Self {
         Self { inner }
     }
 }
-impl<R, S> tower_service::Service<R> for TcpConnector<S>
+impl<R, S> tower_service::Service<R> for TcpLogService<S>
 where
     S: tower_service::Service<R, Response = InnerConn>,
 {
