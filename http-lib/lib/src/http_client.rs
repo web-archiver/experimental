@@ -146,20 +146,13 @@ impl Client {
             req: http::request::Builder::new().method(method).uri(uri),
         }
     }
-}
-impl Service<Request> for Client {
-    type Response = Response;
-    type Error = HttpError;
-    type Future = HttpFuture;
-    fn poll_ready(
-        &mut self,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<std::result::Result<(), Self::Error>> {
-        self.0
-            .poll_ready(cx)
-            .map_err(|e| HttpError(InnerError::Inner(e)))
-    }
-    fn call(&mut self, req: Request) -> Self::Future {
-        HttpFuture(self.0.call(req.0))
+    pub async fn execute(&mut self, req: Request) -> Result<Response, HttpError> {
+        std::future::poll_fn(|cx| self.0.poll_ready(cx))
+            .await
+            .map_err(|e| HttpError(InnerError::Inner(e)))?;
+        match self.0.call(req.0).await {
+            Ok(r) => Ok(Response(r)),
+            Err(e) => Err(HttpError(InnerError::Inner(e))),
+        }
     }
 }
