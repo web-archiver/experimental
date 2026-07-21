@@ -10,7 +10,7 @@ use std::{
 use bytes::Bytes;
 
 use webar_core::{
-    codec::gcbor::{map::GCborMap, support, EncodedVal, GCborCodec, SomeType, ToGCbor, ValueBuf},
+    codec::gcbor::{support, EncodedVal, GCborCodec, SomeType, ToGCbor, ValueBuf},
     digest::Digest,
 };
 use webar_http_lib_core::{blob::Info as BlobInfo, utils::create_file};
@@ -28,17 +28,22 @@ enum RequestId {
     XRequestId(uuid::Uuid),
 }
 
-type HeaderMap<'a> = GCborMap<&'a str, Vec<support::http::HeaderValue<'a>>>;
+#[derive(ToGCbor, valuable::Valuable)]
+struct Header<'a>(&'a str, support::http::HeaderValue<'a>);
+
+type HeaderMap<'a> = Vec<Header<'a>>;
 
 fn from_header_map<'a>(mp: &'a http::header::HeaderMap) -> HeaderMap<'a> {
-    let mut ret: HeaderMap<'a> = GCborMap::new();
-    for (k, v) in mp.iter() {
-        let val = match v.to_str() {
-            Ok(v) => support::http::HeaderValue::String(v),
-            Err(_) => support::http::HeaderValue::Bytes(v.as_bytes()),
-        };
-        ret.entry(k.as_str()).or_default().push(val);
-    }
+    let mut ret: HeaderMap<'a> = Vec::with_capacity(mp.len());
+    ret.extend(mp.iter().map(|(k, v)| {
+        Header(
+            k.as_str(),
+            match v.to_str() {
+                Ok(v) => support::http::HeaderValue::String(v),
+                Err(_) => support::http::HeaderValue::Bytes(v.as_bytes()),
+            },
+        )
+    }));
     ret
 }
 
