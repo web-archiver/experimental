@@ -3,11 +3,13 @@ use std::{convert::Infallible, os::fd::BorrowedFd, sync::Arc};
 use tower::Service;
 
 pub trait Response {
+    fn status(&self) -> http::StatusCode;
     fn headers(&self) -> &http::HeaderMap<http::HeaderValue>;
     fn body(&self) -> &[u8];
     fn set_body(&mut self, b: Vec<u8>);
 }
 
+#[derive(Debug, Clone)]
 pub struct ReqBody(Option<bytes::Bytes>);
 impl ReqBody {
     pub const fn empty() -> Self {
@@ -43,23 +45,48 @@ impl http_body::Body for ReqBody {
 pub mod browser_header;
 pub mod cookie;
 pub mod decompress;
+pub mod id;
 pub mod record;
+pub mod retry;
 pub mod timing;
 
-type DefaultInner<C> = cookie::CookieService<
-    decompress::Decompress<
-        browser_header::BrowserHeaderService<
-            record::RecordService<
-                timing::TimingService<hyper_util::client::legacy::Client<C, timing::TimedBody>>,
+type DefaultInner<C> = id::RequestIdService<
+    retry::RetryService<
+        id::MessageIdService<
+            cookie::CookieService<
+                decompress::Decompress<
+                    browser_header::BrowserHeaderService<
+                        record::RecordService<
+                            timing::TimingService<
+                                hyper_util::client::legacy::Client<C, timing::TimedBody>,
+                            >,
+                        >,
+                    >,
+                >,
             >,
         >,
     >,
 >;
-pub(crate) type DefaultReq = http::Request<ReqBody>;
+
+#[derive(Debug, Clone)]
+pub(crate) struct Request<D> {
+    pub(crate) parts: http::request::Parts,
+    pub(crate) url: Arc<url::Url>,
+    pub(crate) data: D,
+}
+pub(crate) struct MessageReq<D> {
+    request_id: id::RequestId,
+    message_id: id::MessageId,
+    url: Arc<url::Url>,
+    parts: http::request::Parts,
+    data: D,
+}
+
+pub(crate) type DefaultReq = Request<ReqBody>;
 pub(crate) type DefaultResponse = record::RecordResponse<timing::TimingResponse>;
 
 #[derive(Clone)]
-pub struct DefaultService<C>(DefaultInner<C>);
+pub(crate) struct DefaultService<C>(DefaultInner<C>);
 impl<C> DefaultService<C> {
     pub(crate) fn new(
         root: BorrowedFd<'_>,
@@ -71,21 +98,26 @@ impl<C> DefaultService<C> {
     where
         C: hyper_util::client::legacy::connect::Connect + Clone + Send + Sync + 'static,
     {
-        Ok(Self(cookie::CookieService::new(
-            cookies,
-            decompress::Decompress::new(browser_header::BrowserHeaderService::new(
-                record::RecordService::new(
-                    root,
-                    id_generator,
-                    blob_store,
-                    timing::TimingService::new(
-                        hyper_util::client::legacy::Builder::new(
-                            hyper_util::rt::TokioExecutor::new(),
-                        )
-                        .set_host(false)
-                        .build(connector),
-                    ),
-                )?,
+        Ok(Self(id::RequestIdService::new(
+            id_generator.clone(),
+            retry::RetryService::new(id::MessageIdService::new(
+                id_generator,
+                cookie::CookieService::new(
+                    cookies,
+                    decompress::Decompress::new(browser_header::BrowserHeaderService::new(
+                        record::RecordService::new(
+                            root,
+                            blob_store,
+                            timing::TimingService::new(
+                                hyper_util::client::legacy::Builder::new(
+                                    hyper_util::rt::TokioExecutor::new(),
+                                )
+                                .set_host(false)
+                                .build(connector),
+                            ),
+                        )?,
+                    )),
+                ),
             )),
         )))
     }

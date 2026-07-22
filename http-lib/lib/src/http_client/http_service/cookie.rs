@@ -23,7 +23,7 @@ fn parse_set_cookie<'a>(
 #[derive(Debug)]
 #[pin_project::pin_project]
 pub struct CookieFuture<F> {
-    url: url::Url,
+    url: Arc<url::Url>,
     store: Arc<RwLock<cookie_store::CookieStore>>,
     #[pin]
     inner: F,
@@ -75,7 +75,6 @@ enum SetReqHeaderError {
 #[derive(Debug, Clone)]
 pub struct CookieService<S> {
     store: Arc<RwLock<cookie_store::CookieStore>>,
-    uri_buf: String,
     header_buf: String,
     inner: S,
 }
@@ -83,17 +82,16 @@ impl<S> CookieService<S> {
     pub fn new(store: cookie_store::CookieStore, inner: S) -> Self {
         Self {
             store: Arc::new(RwLock::new(store)),
-            uri_buf: String::new(),
             header_buf: String::new(),
             inner,
         }
     }
 }
 impl<S> CookieService<S> {
-    fn set_req_header<B>(
+    fn set_req_header(
         &mut self,
         url: &url::Url,
-        req: &mut http::Request<B>,
+        req: &mut http::request::Parts,
     ) -> Result<(), SetReqHeaderError> {
         let hdr = {
             let store = self.store.read().unwrap();
@@ -111,14 +109,14 @@ impl<S> CookieService<S> {
             http::HeaderValue::from_str(&self.header_buf)
                 .map_err(SetReqHeaderError::InvalidReqHeader)?
         };
-        req.headers_mut().append(http::header::COOKIE, hdr);
+        req.headers.append(http::header::COOKIE, hdr);
 
         Ok(())
     }
 }
-impl<S, B, R> tower::Service<http::Request<B>> for CookieService<S>
+impl<S, B, R> tower::Service<super::MessageReq<B>> for CookieService<S>
 where
-    S: tower::Service<http::Request<B>>,
+    S: tower::Service<super::MessageReq<B>>,
     S::Future: Future<Output = Result<R, S::Error>>,
     R: super::Response,
 {
@@ -131,21 +129,17 @@ where
     ) -> std::task::Poll<Result<(), Self::Error>> {
         self.inner.poll_ready(cx)
     }
-    fn call(&mut self, mut req: http::Request<B>) -> Self::Future {
-        self.uri_buf.clear();
-        let _ = write!(&mut self.uri_buf, "{}", req.uri());
-        let url = url::Url::parse(&self.uri_buf).unwrap();
-
-        if let Err(e) = self.set_req_header(&url, &mut req) {
+    fn call(&mut self, mut req: super::MessageReq<B>) -> Self::Future {
+        if let Err(e) = self.set_req_header(&req.url, &mut req.parts) {
             tracing::warn!(
-                uri = tracing::field::display(req.uri()),
+                url = req.url.as_str(),
                 header = tracing::field::display(self.header_buf.escape_debug()),
                 err = &e as &dyn std::error::Error,
                 "skipped to set request cookie due to error: {e}"
             );
         }
         CookieFuture {
-            url,
+            url: Arc::clone(&req.url),
             store: Arc::clone(&self.store),
             inner: self.inner.call(req),
         }

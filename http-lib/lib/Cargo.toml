@@ -45,7 +45,7 @@ hyper-util = { version = "0.1.20", features = [
   "tracing",
 ] }
 pin-project = "1.1.13"
-tower = { version = "0.5.3", features = ["util"] }
+tower = { version = "0.5.3", features = ["retry", "limit", "util"] }
 thiserror.workspace = true
 libc = "0.2.186"
 hyper-rustls = { version = "0.27.9", features = ["http2"] }
@@ -66,3 +66,4 @@ publicsuffix = "2.3.0"
 webar-direct-connector = { version = "0.1.0", path = "../direct-connector", default-features = false, features = [
   "client",
 ] }
+httpdate = "1.0.3"

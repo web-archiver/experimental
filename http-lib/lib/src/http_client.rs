@@ -1,4 +1,6 @@
-use std::{future::Future, os::fd::BorrowedFd, sync::Arc, task::Poll};
+use std::{
+    borrow::Borrow, future::Future, os::fd::BorrowedFd, str::FromStr, sync::Arc, task::Poll,
+};
 
 use anyhow::Result;
 use http::{HeaderName, HeaderValue, StatusCode};
@@ -8,7 +10,10 @@ use webar_core::digest::Digest;
 
 use crate::blob::BlobStore;
 use http_service::Response as _;
-pub use http_service::{record::MessageId, ReqBody};
+pub use http_service::{
+    id::{MessageId, RequestId},
+    ReqBody,
+};
 
 mod compressible;
 mod connector;
@@ -28,6 +33,9 @@ pub struct Request(http_service::DefaultReq);
 
 pub struct Response(http_service::DefaultResponse);
 impl Response {
+    pub fn request_id(&self) -> &RequestId {
+        &self.0.request_id
+    }
     pub fn message_id(&self) -> &MessageId {
         &self.0.message_id
     }
@@ -78,17 +86,57 @@ impl Future for HttpFuture {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct Url {
+    uri: http::Uri,
+    url: Arc<url::Url>,
+}
+impl Url {
+    pub fn from_str(s: &str) -> anyhow::Result<Self> {
+        Ok(Self {
+            uri: http::Uri::from_str(s)?,
+            url: Arc::new(url::Url::from_str(s)?),
+        })
+    }
+    pub fn from_static(s: &'static str) -> anyhow::Result<Self> {
+        Ok(Self {
+            uri: http::Uri::from_static(s),
+            url: Arc::new(url::Url::from_str(s)?),
+        })
+    }
+    pub fn parse_with_params<I, K, V>(base: &str, params: I) -> anyhow::Result<Self>
+    where
+        I: IntoIterator,
+        I::Item: Borrow<(K, V)>,
+        K: AsRef<str>,
+        V: AsRef<str>,
+    {
+        let url = Arc::new(url::Url::parse_with_params(base, params)?);
+        Ok(Self {
+            uri: http::Uri::from_str(url.as_str())?,
+            url,
+        })
+    }
+}
+
 pub struct RequestBuilder {
+    url: Arc<url::Url>,
     req: http::request::Builder,
 }
 impl RequestBuilder {
     pub fn header(self, k: HeaderName, v: HeaderValue) -> Self {
         Self {
+            url: self.url,
             req: self.req.header(k, v),
         }
     }
     pub fn build(self, body: ReqBody) -> anyhow::Result<Request> {
-        Ok(Request(self.req.body(body)?))
+        let (parts, _) = self.req.body(())?.into_parts();
+        Ok(Request(http_service::Request {
+            url: self.url,
+            parts,
+            data: body,
+        }))
     }
 }
 
@@ -141,9 +189,12 @@ impl Client {
             )?,
         )?))
     }
-    pub fn request(&mut self, method: http::Method, uri: http::Uri) -> RequestBuilder {
+    pub fn request(&mut self, method: http::Method, url: Url) -> RequestBuilder {
         RequestBuilder {
-            req: http::request::Builder::new().method(method).uri(uri),
+            url: url.url,
+            req: http::request::Builder::new()
+                .method(method)
+                .uri(url.uri.clone()),
         }
     }
     pub async fn execute(&mut self, req: Request) -> Result<Response, HttpError> {

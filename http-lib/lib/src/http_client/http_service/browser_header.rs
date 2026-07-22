@@ -11,11 +11,11 @@ const SEC_FETCH_SITE: HeaderName = HeaderName::from_static("sec-fetch-site");
 const SEC_FETCH_USER: HeaderName = HeaderName::from_static("sec-fetch-user");
 
 /// based on chrome 149 linux
-fn add_default_headers<B>(req: &mut http::Request<B>) {
-    let hdr = req.headers_mut();
+fn add_default_headers(req: &mut http::request::Parts) {
     macro_rules! set {
         ($k:expr, $v:expr) => {
-            hdr.entry($k)
+            req.headers
+                .entry($k)
                 .or_insert(const { HeaderValue::from_static($v) })
         };
     }
@@ -51,9 +51,9 @@ impl<S> BrowserHeaderService<S> {
         Self { inner }
     }
 }
-impl<S, B> Service<http::Request<B>> for BrowserHeaderService<S>
+impl<S, B> Service<super::MessageReq<B>> for BrowserHeaderService<S>
 where
-    S: Service<http::Request<B>>,
+    S: Service<super::MessageReq<B>>,
 {
     type Response = S::Response;
     type Error = S::Error;
@@ -64,8 +64,8 @@ where
     ) -> std::task::Poll<Result<(), Self::Error>> {
         self.inner.poll_ready(cx)
     }
-    fn call(&mut self, mut req: http::Request<B>) -> Self::Future {
-        add_default_headers(&mut req);
+    fn call(&mut self, mut req: super::MessageReq<B>) -> Self::Future {
+        add_default_headers(&mut req.parts);
         self.inner.call(req)
     }
 }

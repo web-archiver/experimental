@@ -10,17 +10,13 @@ use std::{
 use bytes::Bytes;
 
 use webar_core::{
-    codec::gcbor::{support, EncodedVal, GCborCodec, SomeType, ToGCbor, ValueBuf},
+    codec::gcbor::{support, EncodedVal, SomeType, ToGCbor, ValueBuf},
     digest::Digest,
 };
 use webar_http_lib_core::{blob::Info as BlobInfo, utils::create_file};
 
-use super::timing;
+use super::{id, timing};
 use crate::{blob::BlobStore, http_client::compressible};
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, GCborCodec)]
-#[gcbor(transparent)]
-pub struct MessageId(crate::local_id::LocalId);
 
 #[derive(ToGCbor)]
 enum RequestId {
@@ -76,7 +72,8 @@ struct Response<'a> {
 
 #[derive(ToGCbor)]
 struct Message<'a, Req, Resp> {
-    id: MessageId,
+    request_id: id::RequestId,
+    message_id: id::MessageId,
     connection: Connection,
     timing: &'a super::timing::Timing,
     request: Req,
@@ -105,10 +102,14 @@ struct RequestBody {
     data: Bytes,
 }
 pub struct RecordResponse<R> {
-    pub(crate) message_id: MessageId,
+    pub(crate) request_id: id::RequestId,
+    pub(crate) message_id: id::MessageId,
     pub(crate) inner: R,
 }
 impl<R: super::Response> super::Response for RecordResponse<R> {
+    fn status(&self) -> http::StatusCode {
+        self.inner.status()
+    }
     fn headers(&self) -> &http::HeaderMap<http::HeaderValue> {
         self.inner.headers()
     }
@@ -122,7 +123,8 @@ impl<R: super::Response> super::Response for RecordResponse<R> {
 
 #[pin_project::pin_project]
 pub struct RecordFuture<F> {
-    id: crate::local_id::LocalId,
+    request_id: id::RequestId,
+    message_id: id::MessageId,
     request: EncodedVal<SomeType>,
     request_body: Option<RequestBody>,
     blob_store: Arc<BlobStore>,
@@ -158,7 +160,8 @@ impl<F> RecordFuture<F> {
             )
             .map_err(Error::BlobStore)?;
         let msg = Message {
-            id: MessageId(self.id),
+            request_id: self.request_id.clone(),
+            message_id: self.message_id.clone(),
             connection: Connection {
                 id: resp
                     .parts
@@ -202,7 +205,8 @@ where
             Poll::Pending => Poll::Pending,
             Poll::Ready(Ok(r)) => match self.record_info(&r) {
                 Ok(()) => Poll::Ready(Ok(RecordResponse {
-                    message_id: MessageId(self.id),
+                    message_id: self.message_id.clone(),
+                    request_id: self.request_id.clone(),
                     inner: r,
                 })),
                 Err(e) => Poll::Ready(Err(e)),
@@ -214,7 +218,6 @@ where
 
 #[derive(Clone)]
 pub struct RecordService<S> {
-    id_generator: crate::local_id::IdGenerator,
     uri_buf: String,
     blob_store: Arc<BlobStore>,
     state: Arc<Mutex<State>>,
@@ -223,14 +226,12 @@ pub struct RecordService<S> {
 impl<S> RecordService<S> {
     pub(crate) fn new(
         root: BorrowedFd<'_>,
-        id_generator: crate::local_id::IdGenerator,
         blob_store: Arc<BlobStore>,
         inner: S,
     ) -> Result<Self, rustix::io::Errno> {
         let log_file = create_file(root, c"http_record.bin")?;
         Ok(Self {
             uri_buf: String::new(),
-            id_generator,
             blob_store,
             state: Arc::new(Mutex::new(State {
                 log_file: log_file.into(),
@@ -240,9 +241,9 @@ impl<S> RecordService<S> {
         })
     }
 }
-impl<S> tower::Service<http::Request<super::ReqBody>> for RecordService<S>
+impl<S> tower::Service<super::MessageReq<super::ReqBody>> for RecordService<S>
 where
-    S: tower::Service<http::Request<super::ReqBody>>,
+    S: tower::Service<super::MessageReq<super::ReqBody>>,
     S::Future: Future<Output = Result<timing::TimingResponse, S::Error>>,
 {
     type Response = RecordResponse<timing::TimingResponse>;
@@ -254,33 +255,32 @@ where
     ) -> std::task::Poll<Result<(), Self::Error>> {
         self.inner.poll_ready(cx).map_err(Error::Inner)
     }
-    fn call(&mut self, mut req: http::Request<super::ReqBody>) -> Self::Future {
-        let id = self.id_generator.generate();
+    fn call(&mut self, mut req: super::MessageReq<super::ReqBody>) -> Self::Future {
         let mut buf = [0; uuid::fmt::Hyphenated::LENGTH];
 
         let req_id = uuid::Uuid::new_v8({
             let mut ret = [0; 16];
-            let id_bytes = id.as_u64().to_be_bytes();
+            let id_bytes = req.message_id.clone().into_u64().to_be_bytes();
             *ret.first_chunk_mut().unwrap() = id_bytes;
             *ret.last_chunk_mut().unwrap() = id_bytes;
             ret
         });
-        req.headers_mut().insert(
+        req.parts.headers.insert(
             const { http::HeaderName::from_static("x-request-id") },
             http::HeaderValue::from_str(req_id.as_hyphenated().encode_lower(&mut buf)).unwrap(),
         );
 
         self.uri_buf.clear();
-        let _ = write!(&mut self.uri_buf, "{}", req.uri());
-        let request_body = req.body().0.as_ref().map(|b| RequestBody {
-            info: match req.extensions().get::<BlobInfo>() {
+        let _ = write!(&mut self.uri_buf, "{}", req.parts.uri);
+        let request_body = req.data.0.as_ref().map(|b| RequestBody {
+            info: match req.parts.extensions.get::<BlobInfo>() {
                 Some(v) => {
                     assert_eq!(v.size, b.len() as u64);
                     v.clone()
                 }
                 None => BlobInfo {
                     size: b.len() as u64,
-                    is_compressible: compressible::check(req.headers(), b),
+                    is_compressible: compressible::check(&req.parts.headers, b),
                 },
             },
             digest: Digest::hash_buf(b),
@@ -288,9 +288,9 @@ where
         });
         let req_info = Request {
             id: RequestId::XRequestId(req_id),
-            method: req.method().as_str(),
+            method: req.parts.method.as_str(),
             url: &self.uri_buf,
-            headers: from_header_map(req.headers()),
+            headers: from_header_map(&req.parts.headers),
             body: request_body.as_ref().map(|b| &b.digest),
             trailers: None,
         };
@@ -299,7 +299,8 @@ where
             "sending_request"
         );
         RecordFuture {
-            id,
+            request_id: req.request_id.clone(),
+            message_id: req.message_id.clone(),
             request: EncodedVal::new(&req_info).untype(),
             request_body,
             blob_store: Arc::clone(&self.blob_store),

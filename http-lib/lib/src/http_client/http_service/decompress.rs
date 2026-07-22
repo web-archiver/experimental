@@ -75,9 +75,9 @@ impl<S> Decompress<S> {
         Self(inner)
     }
 }
-impl<S, B> Service<http::Request<B>> for Decompress<S>
+impl<S, B> Service<super::MessageReq<B>> for Decompress<S>
 where
-    S: Service<http::Request<B>>,
+    S: Service<super::MessageReq<B>>,
     S::Response: super::Response,
 {
     type Response = S::Response;
@@ -89,8 +89,8 @@ where
     ) -> std::task::Poll<Result<(), Self::Error>> {
         self.0.poll_ready(cx).map_err(DecompressError::Inner)
     }
-    fn call(&mut self, mut req: http::Request<B>) -> Self::Future {
-        req.headers_mut().insert(
+    fn call(&mut self, mut req: super::MessageReq<B>) -> Self::Future {
+        req.parts.headers.insert(
             http::header::ACCEPT_ENCODING,
             const { http::HeaderValue::from_static("gzip, deflate, br, zstd") },
         );
