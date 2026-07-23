@@ -16,6 +16,7 @@ mod https;
 mod tcp_log;
 mod tls;
 mod tokio_io;
+mod tracing;
 mod unix;
 
 pub use default::DefaultConnector;

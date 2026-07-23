@@ -179,9 +179,13 @@ impl Service<http::Uri> for BaseConnector {
 }
 
 type Inner = tokio_io::TokioIoService<
-    capture::Capture<
-        https::CaptureRef<'static>,
-        https::MaybeHttpsConnector<capture::Capture<capture::RefConfig<'static>, BaseConnector>>,
+    super::tracing::TracingService<
+        capture::Capture<
+            https::CaptureRef<'static>,
+            https::MaybeHttpsConnector<
+                capture::Capture<capture::RefConfig<'static>, BaseConnector>,
+            >,
+        >,
     >,
 >;
 
@@ -267,6 +271,7 @@ impl DefaultConnector {
             } else {
                 &tls::CaptureHandshake::CONFIG
             })))
+            .once_layer(super::tracing::TracingLayer::new())
             .once_layer(tokio_io::TokioIoLayer::new())
             .build();
         Ok(Self(inner))
