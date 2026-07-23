@@ -11,11 +11,10 @@ use std::{
     time::{Duration, Instant},
 };
 
-use hyper::rt::{Read, Write};
-
 use webar_core::{
     bytes::Bytes,
     codec::gcbor::{GCborCodec, ToGCbor, ValueBuf},
+    service::{OnceLayer, Service},
     time::Timestamp,
 };
 use webar_http_lib_core::utils::{create_file, write_file};
@@ -137,7 +136,7 @@ struct Event<'a> {
     kind: EventKind<'a>,
 }
 
-type InnerConn = super::conn_meta::WithMeta<hyper_util::rt::TokioIo<tokio::net::TcpStream>>;
+type InnerConn = super::conn_meta::WithMeta<tokio::net::TcpStream>;
 
 #[pin_project::pin_project(PinnedDrop)]
 pub struct Connection {
@@ -172,7 +171,7 @@ impl Connection {
         let (val, raw_val) = unsafe {
             let mut len = size_of::<libc::tcp_info>() as u32;
             if libc::getsockopt(
-                self.conn.conn.inner().as_raw_fd(),
+                self.conn.conn.as_raw_fd(),
                 libc::IPPROTO_TCP,
                 libc::TCP_INFO,
                 info_buf.as_mut_ptr().cast(),
@@ -209,17 +208,17 @@ impl Connection {
         }
     }
 }
-impl Read for Connection {
+impl tokio::io::AsyncRead for Connection {
     fn poll_read(
         mut self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
-        buf: hyper::rt::ReadBufCursor<'_>,
-    ) -> Poll<Result<(), std::io::Error>> {
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
         self.as_mut().write_status();
         self.project().conn.poll_read(cx, buf)
     }
 }
-impl Write for Connection {
+impl tokio::io::AsyncWrite for Connection {
     fn is_write_vectored(&self) -> bool {
         self.conn.is_write_vectored()
     }
@@ -311,7 +310,7 @@ where
             Poll::Pending => Poll::Pending,
             Poll::Ready(Ok(conn)) => {
                 let connected_ts = Timestamp::now();
-                let tcp_conn = conn.conn.inner();
+                let tcp_conn = &conn.conn;
 
                 let info = match tcp_conn.local_addr().and_then(|la| {
                     let pa = tcp_conn.peer_addr()?;
@@ -361,25 +360,30 @@ where
 pub struct TcpLogService<S> {
     inner: S,
 }
-impl<S> TcpLogService<S> {
-    pub(crate) fn new(inner: S) -> Self {
-        Self { inner }
-    }
-}
-impl<R, S> tower_service::Service<R> for TcpLogService<S>
+impl<R, S> Service<R> for TcpLogService<S>
 where
-    S: tower_service::Service<R, Response = InnerConn>,
+    S: Service<R, Response = InnerConn>,
 {
     type Response = Connection;
     type Error = ConnectError<S::Error>;
     type Future = ConnectFuture<S::Future>;
-    fn poll_ready(&mut self, cx: &mut std::task::Context<'_>) -> Poll<Result<(), Self::Error>> {
-        self.inner.poll_ready(cx).map_err(ConnectError::Http)
-    }
-    fn call(&mut self, req: R) -> Self::Future {
+    fn call(&self, req: R) -> Self::Future {
         ConnectFuture {
             start_timestamp: Timestamp::now(),
             inner: self.inner.call(req),
         }
+    }
+}
+
+pub struct TcpLogLayer();
+impl TcpLogLayer {
+    pub(crate) fn new() -> Self {
+        Self()
+    }
+}
+impl<S> OnceLayer<S> for TcpLogLayer {
+    type Service = TcpLogService<S>;
+    fn layer_once(self, inner: S) -> Self::Service {
+        TcpLogService { inner }
     }
 }

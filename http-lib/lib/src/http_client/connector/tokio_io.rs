@@ -2,6 +2,8 @@ use std::task::Poll;
 
 use hyper_util::rt::TokioIo;
 
+use webar_core::service::{OnceLayer, Service};
+
 use super::conn_meta::ConnectionMeta;
 
 impl<C: ConnectionMeta> ConnectionMeta for TokioIo<C> {
@@ -34,17 +36,27 @@ where
 
 #[derive(Debug, Clone)]
 pub struct TokioIoService<S>(pub S);
-impl<S, R> tower_service::Service<R> for TokioIoService<S>
+impl<S, R> Service<R> for TokioIoService<S>
 where
-    S: tower_service::Service<R>,
+    S: Service<R>,
 {
     type Response = TokioIo<S::Response>;
     type Error = S::Error;
     type Future = TokioIoFuture<S::Future>;
-    fn poll_ready(&mut self, cx: &mut std::task::Context<'_>) -> Poll<Result<(), Self::Error>> {
-        self.0.poll_ready(cx)
-    }
-    fn call(&mut self, req: R) -> Self::Future {
+    fn call(&self, req: R) -> Self::Future {
         TokioIoFuture(self.0.call(req))
+    }
+}
+
+pub struct TokioIoLayer();
+impl TokioIoLayer {
+    pub(crate) fn new() -> Self {
+        Self()
+    }
+}
+impl<S> OnceLayer<S> for TokioIoLayer {
+    type Service = TokioIoService<S>;
+    fn layer_once(self, inner: S) -> Self::Service {
+        TokioIoService(inner)
     }
 }

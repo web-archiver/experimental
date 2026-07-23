@@ -18,6 +18,7 @@ mod compressible;
 mod connector;
 pub mod cookie;
 mod http_service;
+mod service_util;
 
 #[derive(Debug, thiserror::Error)]
 enum InnerError {

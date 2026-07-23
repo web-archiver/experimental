@@ -1,5 +1,6 @@
 use std::{net::IpAddr, os::fd::BorrowedFd, pin::Pin, str::FromStr, sync::Arc, task::Poll};
 
+use webar_core::service::Service;
 use webar_direct_connector::client::{self, Client};
 
 #[derive(Debug, thiserror::Error)]
@@ -72,14 +73,11 @@ impl TcpConnector {
         })
     }
 }
-impl tower_service::Service<http::Uri> for TcpConnector {
+impl Service<http::Uri> for TcpConnector {
     type Response = tokio::net::TcpStream;
     type Error = Error;
     type Future = TcpConnectFuture;
-    fn poll_ready(&mut self, _: &mut std::task::Context<'_>) -> Poll<Result<(), Self::Error>> {
-        Poll::Ready(Ok(()))
-    }
-    fn call(&mut self, req: http::Uri) -> Self::Future {
+    fn call(&self, req: http::Uri) -> Self::Future {
         let client = Arc::clone(&self.client);
         TcpConnectFuture(Box::pin(async move {
             let port = match req.port_u16() {

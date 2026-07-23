@@ -11,6 +11,8 @@ mod capture;
 mod conn_meta;
 mod default;
 mod direct;
+mod http_tunnel;
+mod https;
 mod tcp_log;
 mod tls;
 mod tokio_io;

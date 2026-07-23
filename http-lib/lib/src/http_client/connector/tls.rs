@@ -1,13 +1,13 @@
 use std::{ffi::CStr, future::Future, os::fd::BorrowedFd, sync::Arc, task::Poll};
 
-use hyper::rt::{Read, Write};
-use hyper_rustls::MaybeHttpsStream;
-use hyper_util::{client::legacy::connect::Connection as HyperConnection, rt::TokioIo};
 use rustix::io::Errno;
 
+use rustls::pki_types::ServerName;
+use tokio_rustls::client::TlsStream;
 use webar_core::{
     bytes::Bytes,
     codec::gcbor::{self, support::tls::CborDer, ToGCbor},
+    service::{OnceLayer, Service},
 };
 use webar_http_lib_core::utils::write_file;
 
@@ -17,8 +17,8 @@ const TX_DATA_FILE: &CStr = c"tls_tx_data.bin";
 const RX_DATA_FILE: &CStr = c"tls_rx_data.bin";
 
 #[derive(Debug, Clone)]
-pub struct CaptureMaybeHttpsHandshake;
-impl CaptureMaybeHttpsHandshake {
+pub struct CaptureHandshake;
+impl CaptureHandshake {
     pub const CONFIG: super::capture::CaptureConfig = super::capture::CaptureConfig {
         rx_path: RX_DATA_FILE,
         rx_max_size: std::num::NonZeroU64::new(super::CAPTURE_HANDSHAKE_SIZE),
@@ -26,18 +26,15 @@ impl CaptureMaybeHttpsHandshake {
         tx_max_size: std::num::NonZeroU64::new(super::CAPTURE_HANDSHAKE_SIZE),
     };
 }
-impl<T> super::capture::Config<MaybeHttpsStream<T>> for CaptureMaybeHttpsHandshake {
-    fn capture_config(&self, conn: &MaybeHttpsStream<T>) -> Option<&super::capture::CaptureConfig> {
-        match conn {
-            MaybeHttpsStream::Http(_) => None,
-            MaybeHttpsStream::Https(_) => Some(&Self::CONFIG),
-        }
+impl<T> super::capture::Config<TlsStream<T>> for CaptureHandshake {
+    fn capture_config(&self, _: &TlsStream<T>) -> Option<&super::capture::CaptureConfig> {
+        Some(&Self::CONFIG)
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct CaptureMaybeHttpsAll;
-impl CaptureMaybeHttpsAll {
+pub struct CaptureAll;
+impl CaptureAll {
     pub const CONFIG: super::capture::CaptureConfig = super::capture::CaptureConfig {
         rx_path: RX_DATA_FILE,
         rx_max_size: None,
@@ -45,32 +42,22 @@ impl CaptureMaybeHttpsAll {
         tx_max_size: None,
     };
 }
-impl<T> super::capture::Config<MaybeHttpsStream<T>> for CaptureMaybeHttpsAll {
-    fn capture_config(&self, conn: &MaybeHttpsStream<T>) -> Option<&super::capture::CaptureConfig> {
-        match conn {
-            MaybeHttpsStream::Http(_) => None,
-            MaybeHttpsStream::Https(_) => Some(&Self::CONFIG),
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct CaptureMaybeHttpsRef<'a>(pub &'a super::capture::CaptureConfig);
-impl<'a, T> super::capture::Config<MaybeHttpsStream<T>> for CaptureMaybeHttpsRef<'a> {
-    fn capture_config(&self, conn: &MaybeHttpsStream<T>) -> Option<&super::capture::CaptureConfig> {
-        match conn {
-            MaybeHttpsStream::Http(_) => None,
-            MaybeHttpsStream::Https(_) => Some(self.0),
-        }
+impl<T> super::capture::Config<TlsStream<T>> for CaptureAll {
+    fn capture_config(&self, _: &TlsStream<T>) -> Option<&super::capture::CaptureConfig> {
+        Some(&Self::CONFIG)
     }
 }
 
 #[derive(Debug, thiserror::Error)]
-pub enum Error {
+pub enum Error<E> {
+    #[error("invalid server name: {0}")]
+    InvalidServerName(#[source] rustls::pki_types::InvalidDnsNameError),
     #[error("failed to write tls info")]
     WriteInfo(#[source] Errno),
-    #[error("failed to establish tls connection")]
-    Inner(#[source] Box<dyn std::error::Error + Send + Sync>),
+    #[error("failed to connect tls: {0}")]
+    Tls(#[source] std::io::Error),
+    #[error("failed to establish lower connection: {0}")]
+    Inner(#[source] E),
 }
 
 #[derive(ToGCbor)]
@@ -83,160 +70,167 @@ struct Info<'a> {
     negotiated_key_exchange_group: u16,
 }
 
+#[pin_project::pin_project(project=InnerProj)]
+enum InnerFuture<C, F> {
+    LowerConnect {
+        #[pin]
+        fut: F,
+        server_name: ServerName<'static>,
+        tls_connector: tokio_rustls::client::TlsConnector,
+    },
+    TlsConnect(#[pin] Box<tokio_rustls::Connect<C>>),
+    HostError(Option<rustls::pki_types::InvalidDnsNameError>),
+}
+
 #[pin_project::pin_project]
-pub struct ConnectFuture<F>(#[pin] F);
-impl<F, T> Future for ConnectFuture<F>
+pub struct ConnectFuture<C, F>(#[pin] InnerFuture<C, F>);
+impl<C, E, F> Future for ConnectFuture<C, F>
 where
-    F: Future<Output = Result<MaybeHttpsStream<T>, Box<dyn std::error::Error + Send + Sync>>>,
-    T: HyperConnection + ConnectionMeta,
+    F: Future<Output = Result<C, E>>,
+    C: tokio::io::AsyncRead + tokio::io::AsyncWrite + ConnectionMeta + Unpin,
 {
-    type Output = Result<MaybeHttpsStream<T>, Error>;
+    type Output = Result<TlsStream<C>, Error<E>>;
     fn poll(
         self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Self::Output> {
-        match self.project().0.poll(cx) {
-            Poll::Pending => Poll::Pending,
-            Poll::Ready(Ok(conn @ MaybeHttpsStream::Http(_))) => Poll::Ready(Ok(conn)),
-            Poll::Ready(Ok(MaybeHttpsStream::Https(conn))) => {
-                let tls_conn = conn.inner().get_ref().1;
-                match write_file(
-                    conn.inner().get_ref().0.data_root(),
-                    c"tls_info.bin",
-                    &gcbor::to_vec(&Info {
-                        protocol_version: tls_conn.protocol_version().unwrap().into(),
-                        der: CborDer(tls_conn.peer_certificates().unwrap()),
-                        alpn: tls_conn.alpn_protocol().map(Bytes::new),
-                        negotiated_cipher_suite: tls_conn
-                            .negotiated_cipher_suite()
-                            .unwrap()
-                            .suite()
-                            .into(),
-                        negotiated_key_exchange_group: tls_conn
-                            .negotiated_key_exchange_group()
-                            .unwrap()
-                            .name()
-                            .into(),
-                    }),
-                ) {
-                    Ok(()) => Poll::Ready(Ok(MaybeHttpsStream::Https(conn))),
-                    Err(e) => Poll::Ready(Err(Error::WriteInfo(e))),
+        let mut inner = self.project().0;
+        match inner.as_mut().project() {
+            InnerProj::LowerConnect {
+                fut,
+                server_name,
+                tls_connector,
+            } => match fut.poll(cx) {
+                Poll::Pending => Poll::Pending,
+                Poll::Ready(Ok(conn)) => {
+                    let fut = tls_connector.connect(
+                        std::mem::replace(
+                            server_name,
+                            ServerName::IpAddress(rustls::pki_types::IpAddr::V4(
+                                rustls::pki_types::Ipv4Addr::from([0; 4]),
+                            )),
+                        ),
+                        conn,
+                    );
+                    inner.set(InnerFuture::TlsConnect(Box::new(fut)));
+                    Poll::Pending
                 }
+                Poll::Ready(Err(e)) => Poll::Ready(Err(Error::Inner(e))),
+            },
+            InnerProj::TlsConnect(fut) => match fut.poll(cx) {
+                Poll::Pending => Poll::Pending,
+                Poll::Ready(Ok(conn)) => {
+                    let tls_conn = conn.get_ref().1;
+                    match write_file(
+                        conn.get_ref().0.data_root(),
+                        c"tls_info.bin",
+                        &gcbor::to_vec(&Info {
+                            protocol_version: tls_conn.protocol_version().unwrap().into(),
+                            der: CborDer(tls_conn.peer_certificates().unwrap()),
+                            alpn: tls_conn.alpn_protocol().map(Bytes::new),
+                            negotiated_cipher_suite: tls_conn
+                                .negotiated_cipher_suite()
+                                .unwrap()
+                                .suite()
+                                .into(),
+                            negotiated_key_exchange_group: tls_conn
+                                .negotiated_key_exchange_group()
+                                .unwrap()
+                                .name()
+                                .into(),
+                        }),
+                    ) {
+                        Ok(()) => Poll::Ready(Ok(conn)),
+                        Err(e) => Poll::Ready(Err(Error::WriteInfo(e))),
+                    }
+                }
+                Poll::Ready(Err(e)) => Poll::Ready(Err(Error::Tls(e))),
+            },
+            InnerProj::HostError(e) => {
+                Poll::Ready(Err(Error::InvalidServerName(e.take().unwrap())))
             }
-            Poll::Ready(Err(e)) => Poll::Ready(Err(Error::Inner(e))),
         }
     }
 }
-impl<T: ConnectionMeta> ConnectionMeta for tokio_rustls::client::TlsStream<T> {
+impl<T: ConnectionMeta> ConnectionMeta for TlsStream<T> {
+    #[inline]
     fn local_id(&self) -> crate::local_id::LocalId {
         self.get_ref().0.local_id()
     }
+    #[inline]
     fn data_root(&self) -> BorrowedFd<'_> {
         self.get_ref().0.data_root()
     }
 }
-impl<T: ConnectionMeta> ConnectionMeta for MaybeHttpsStream<T> {
-    fn local_id(&self) -> crate::local_id::LocalId {
-        match self {
-            Self::Http(c) => c.local_id(),
-            Self::Https(c) => c.local_id(),
-        }
-    }
-    fn data_root(&self) -> BorrowedFd<'_> {
-        match self {
-            Self::Http(c) => c.data_root(),
-            Self::Https(c) => c.data_root(),
-        }
-    }
-}
 
-#[derive(Debug, Clone)]
-pub struct MaybeHttpsConnector<T>(hyper_rustls::HttpsConnector<T>);
-impl<T> MaybeHttpsConnector<T> {
-    pub(crate) fn new(root: BorrowedFd<'_>, inner: T) -> Result<Self, rustix::io::Errno> {
-        Ok(Self(
-            hyper_rustls::HttpsConnectorBuilder::new()
-                .with_tls_config({
-                    let mut cfg = rustls::ClientConfig::builder()
-                        .with_root_certificates(Arc::new(rustls::RootCertStore {
-                            roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
-                        }))
-                        .with_no_client_auth();
-                    cfg.enable_sni = true;
-                    cfg.key_log = Arc::new(crate::tls::FileKeyLog::new(root)?);
-                    cfg
-                })
-                .https_only()
-                .enable_all_versions()
-                .wrap_connector(inner),
-        ))
+#[derive(Clone)]
+pub struct TlsConnector<C> {
+    connector: tokio_rustls::client::TlsConnector,
+    inner: C,
+}
+impl<T> TlsConnector<T> {
+    fn connect<R>(
+        &self,
+        server_name: ServerName<'static>,
+        req: R,
+    ) -> ConnectFuture<T::Response, T::Future>
+    where
+        T: Service<R>,
+    {
+        ConnectFuture(InnerFuture::LowerConnect {
+            server_name,
+            tls_connector: self.connector.clone(),
+            fut: self.inner.call(req),
+        })
+    }
+    pub(crate) fn inner(&self) -> &T {
+        &self.inner
     }
 }
-impl<T> tower_service::Service<http::Uri> for MaybeHttpsConnector<T>
+impl<T> Service<http::Uri> for TlsConnector<T>
 where
-    T: tower_service::Service<http::Uri>,
-    T::Response: Read + Write + HyperConnection + ConnectionMeta + Send + Unpin + 'static,
-    T::Future: Send + 'static,
-    T::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
+    T: Service<http::Uri>,
+    T::Response: tokio::io::AsyncWrite + tokio::io::AsyncRead + ConnectionMeta + Unpin,
 {
-    type Response = MaybeHttpsStream<T::Response>;
-    type Error = Error;
-    type Future = ConnectFuture<
-        <hyper_rustls::HttpsConnector<T> as tower_service::Service<http::Uri>>::Future,
-    >;
-    fn poll_ready(
-        &mut self,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Result<(), Self::Error>> {
-        self.0.poll_ready(cx).map_err(Error::Inner)
-    }
-    fn call(&mut self, req: http::Uri) -> Self::Future {
-        ConnectFuture(self.0.call(req))
-    }
-}
-
-pub type HttpsOnlyStream<T> = TokioIo<tokio_rustls::client::TlsStream<TokioIo<T>>>;
-
-#[derive(Debug, thiserror::Error)]
-pub enum HttpsOnlyError<E> {
-    #[error("{0}")]
-    Inner(#[source] E),
-    #[error("expect https connection")]
-    HttpsOnly,
-}
-#[pin_project::pin_project]
-pub struct HttpsOnlyFuture<F>(#[pin] F);
-impl<F, T, E> Future for HttpsOnlyFuture<F>
-where
-    F: Future<Output = Result<MaybeHttpsStream<T>, E>>,
-{
-    type Output = Result<HttpsOnlyStream<T>, HttpsOnlyError<E>>;
-    fn poll(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> Poll<Self::Output> {
-        match self.project().0.poll(cx) {
-            Poll::Pending => Poll::Pending,
-            Poll::Ready(Ok(MaybeHttpsStream::Https(c))) => Poll::Ready(Ok(c)),
-            Poll::Ready(Ok(MaybeHttpsStream::Http(_))) => {
-                Poll::Ready(Err(HttpsOnlyError::HttpsOnly))
-            }
-            Poll::Ready(Err(e)) => Poll::Ready(Err(HttpsOnlyError::Inner(e))),
+    type Response = TlsStream<T::Response>;
+    type Error = Error<T::Error>;
+    type Future = ConnectFuture<T::Response, T::Future>;
+    fn call(&self, req: http::Uri) -> Self::Future {
+        let host = req.host().unwrap_or_default();
+        let host = host
+            .strip_suffix('[')
+            .and_then(|s| s.strip_suffix(']'))
+            .unwrap_or(host);
+        match ServerName::try_from(host) {
+            Ok(name) => self.connect(name.to_owned(), req),
+            Err(e) => ConnectFuture(InnerFuture::HostError(Some(e))),
         }
     }
 }
 
-#[allow(dead_code)]
-#[derive(Debug, Clone)]
-pub struct HttpsOnlyConnector<S>(pub(crate) S);
-impl<S, T> tower_service::Service<http::Uri> for HttpsOnlyConnector<S>
-where
-    S: tower_service::Service<http::Uri, Response = MaybeHttpsStream<T>>,
-{
-    type Response = HttpsOnlyStream<T>;
-    type Error = HttpsOnlyError<S::Error>;
-    type Future = HttpsOnlyFuture<S::Future>;
-    fn poll_ready(&mut self, cx: &mut std::task::Context<'_>) -> Poll<Result<(), Self::Error>> {
-        self.0.poll_ready(cx).map_err(HttpsOnlyError::Inner)
+pub struct TlsLayer(Arc<rustls::ClientConfig>);
+impl TlsLayer {
+    pub(crate) fn new(root: BorrowedFd<'_>, alpn: Vec<Vec<u8>>) -> Result<Self, rustix::io::Errno> {
+        let mut cfg = rustls::ClientConfig::builder()
+            .with_root_certificates(Arc::new(rustls::RootCertStore {
+                roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
+            }))
+            .with_no_client_auth();
+        cfg.enable_sni = true;
+        cfg.key_log = Arc::new(crate::tls::FileKeyLog::new(root)?);
+        cfg.alpn_protocols = alpn;
+        Ok(Self(Arc::new(cfg)))
     }
-    fn call(&mut self, req: http::Uri) -> Self::Future {
-        HttpsOnlyFuture(self.0.call(req))
+    pub(crate) fn new_https(root: BorrowedFd<'_>) -> Result<Self, rustix::io::Errno> {
+        Self::new(root, Vec::from([b"h2".to_vec(), b"http/1.1".to_vec()]))
+    }
+}
+impl<S> OnceLayer<S> for TlsLayer {
+    type Service = TlsConnector<S>;
+    fn layer_once(self, inner: S) -> Self::Service {
+        TlsConnector {
+            connector: tokio_rustls::client::TlsConnector::from(self.0),
+            inner,
+        }
     }
 }

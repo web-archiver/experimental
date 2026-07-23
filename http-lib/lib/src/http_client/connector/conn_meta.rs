@@ -6,11 +6,12 @@ use std::{
 
 use webar_core::{
     codec::gcbor::{self, ToGCbor},
+    service::{OnceLayer, Service},
     time::Timestamp,
 };
 use webar_http_lib_core::utils::{open_new_dir, write_file};
 
-use crate::local_id::LocalId;
+use crate::local_id::{self, LocalId};
 
 pub trait ConnectionMeta {
     fn local_id(&self) -> LocalId;
@@ -25,6 +26,7 @@ pub struct WithMeta<C> {
     pub(crate) conn: C,
 }
 impl<C: hyper::rt::Read> hyper::rt::Read for WithMeta<C> {
+    #[inline]
     fn poll_read(
         self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
@@ -33,7 +35,18 @@ impl<C: hyper::rt::Read> hyper::rt::Read for WithMeta<C> {
         self.project().conn.poll_read(cx, buf)
     }
 }
+impl<C: tokio::io::AsyncRead> tokio::io::AsyncRead for WithMeta<C> {
+    #[inline]
+    fn poll_read(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        self.project().conn.poll_read(cx, buf)
+    }
+}
 impl<C: hyper::rt::Write> hyper::rt::Write for WithMeta<C> {
+    #[inline]
     fn poll_write(
         self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
@@ -41,9 +54,11 @@ impl<C: hyper::rt::Write> hyper::rt::Write for WithMeta<C> {
     ) -> std::task::Poll<Result<usize, std::io::Error>> {
         self.project().conn.poll_write(cx, buf)
     }
+    #[inline]
     fn is_write_vectored(&self) -> bool {
         self.conn.is_write_vectored()
     }
+    #[inline]
     fn poll_write_vectored(
         self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
@@ -51,16 +66,54 @@ impl<C: hyper::rt::Write> hyper::rt::Write for WithMeta<C> {
     ) -> std::task::Poll<Result<usize, std::io::Error>> {
         self.project().conn.poll_write_vectored(cx, bufs)
     }
+    #[inline]
     fn poll_flush(
         self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Result<(), std::io::Error>> {
         self.project().conn.poll_flush(cx)
     }
+    #[inline]
     fn poll_shutdown(
         self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Result<(), std::io::Error>> {
+        self.project().conn.poll_shutdown(cx)
+    }
+}
+impl<C: tokio::io::AsyncWrite> tokio::io::AsyncWrite for WithMeta<C> {
+    #[inline]
+    fn poll_write(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        self.project().conn.poll_write(cx, buf)
+    }
+    #[inline]
+    fn is_write_vectored(&self) -> bool {
+        self.conn.is_write_vectored()
+    }
+    #[inline]
+    fn poll_write_vectored(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        bufs: &[std::io::IoSlice<'_>],
+    ) -> Poll<std::io::Result<usize>> {
+        self.project().conn.poll_write_vectored(cx, bufs)
+    }
+    #[inline]
+    fn poll_flush(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        self.project().conn.poll_flush(cx)
+    }
+    #[inline]
+    fn poll_shutdown(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> Poll<std::io::Result<()>> {
         self.project().conn.poll_shutdown(cx)
     }
 }
@@ -154,11 +207,30 @@ pub struct ConnMetaService<S> {
     log_root: Arc<OwnedFd>,
     inner: S,
 }
-impl<S> ConnMetaService<S> {
+impl<S, R> Service<R> for ConnMetaService<S>
+where
+    S: Service<R>,
+{
+    type Response = WithMeta<S::Response>;
+    type Error = Error<S::Error>;
+    type Future = ConnectFuture<S::Future>;
+    fn call(&self, req: R) -> Self::Future {
+        ConnectFuture {
+            local_id: self.id_generator.generate(),
+            log_root: Arc::clone(&self.log_root),
+            inner: self.inner.call(req),
+        }
+    }
+}
+
+pub struct ConnMetaLayer {
+    log_root: Arc<OwnedFd>,
+    id_generator: local_id::IdGenerator,
+}
+impl ConnMetaLayer {
     pub(crate) fn with_connector(
         root: BorrowedFd<'_>,
         id_generator: crate::local_id::IdGenerator,
-        inner: S,
     ) -> Result<Self, rustix::io::Errno> {
         Ok(Self {
             log_root: Arc::new(webar_http_lib_core::utils::open_new_dir(
@@ -166,25 +238,16 @@ impl<S> ConnMetaService<S> {
                 c"connection",
             )?),
             id_generator,
-            inner,
         })
     }
 }
-impl<S, R> tower_service::Service<R> for ConnMetaService<S>
-where
-    S: tower_service::Service<R>,
-{
-    type Response = WithMeta<S::Response>;
-    type Error = Error<S::Error>;
-    type Future = ConnectFuture<S::Future>;
-    fn poll_ready(&mut self, cx: &mut std::task::Context<'_>) -> Poll<Result<(), Self::Error>> {
-        self.inner.poll_ready(cx).map_err(Error::Inner)
-    }
-    fn call(&mut self, req: R) -> Self::Future {
-        ConnectFuture {
-            local_id: self.id_generator.generate(),
-            log_root: Arc::clone(&self.log_root),
-            inner: self.inner.call(req),
+impl<S> OnceLayer<S> for ConnMetaLayer {
+    type Service = ConnMetaService<S>;
+    fn layer_once(self, inner: S) -> Self::Service {
+        ConnMetaService {
+            id_generator: self.id_generator,
+            log_root: self.log_root,
+            inner,
         }
     }
 }

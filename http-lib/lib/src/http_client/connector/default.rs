@@ -1,8 +1,10 @@
-use std::{ffi::CStr, num::NonZeroU64, os::fd::BorrowedFd, task::Poll};
+use std::{ffi::CStr, num::NonZeroU64, os::fd::BorrowedFd, sync::Arc, task::Poll};
 
 use anyhow::Context as _;
 
-use super::{capture, conn_meta, direct, tcp_log, tls, tokio_io, unix};
+use webar_core::service::{builder::ServiceBuilder, Service};
+
+use super::{capture, conn_meta, direct, http_tunnel, https, tcp_log, tls, tokio_io, unix};
 
 const PROXY_TX_FILE: &CStr = c"proxy_tx_data.bin";
 const PROXY_RX_FILE: &CStr = c"proxy_rx_data.bin";
@@ -39,19 +41,15 @@ impl<T> capture::Config<T> for CaptureProxyHandshake {
     }
 }
 
-type TcpDirect = tcp_log::TcpLogService<
-    conn_meta::ConnMetaService<tokio_io::TokioIoService<direct::TcpConnector>>,
->;
+type TcpDirect = tcp_log::TcpLogService<conn_meta::ConnMetaService<direct::TcpConnector>>;
 
 type HttpTunnel = conn_meta::ConnMetaService<
-    hyper_util::client::legacy::connect::proxy::Tunnel<
-        tokio_io::TokioIoService<unix::UnixConnector>,
-    >,
+    http_tunnel::HttpTunnel<unix::UnixConnector, std::sync::Arc<std::os::unix::net::SocketAddr>>,
 >;
 
 macro_rules! service_ty {
     ($t:ty, $v:ident) => {
-        <$t as tower_service::Service<http::Uri>>::$v
+        <$t as Service<http::Uri>>::$v
     };
 }
 
@@ -76,16 +74,16 @@ macro_rules! forward_conn {
         }
     };
 }
-impl hyper::rt::Read for BaseConn {
+impl tokio::io::AsyncRead for BaseConn {
     fn poll_read(
         self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
-        buf: hyper::rt::ReadBufCursor<'_>,
-    ) -> Poll<Result<(), std::io::Error>> {
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
         forward_conn_pin!(self, poll_read(cx, buf))
     }
 }
-impl hyper::rt::Write for BaseConn {
+impl tokio::io::AsyncWrite for BaseConn {
     fn poll_write(
         self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
@@ -168,17 +166,11 @@ enum BaseConnector {
     TcpDirect(TcpDirect),
     HttpTunnel(HttpTunnel),
 }
-impl tower_service::Service<http::Uri> for BaseConnector {
+impl Service<http::Uri> for BaseConnector {
     type Response = BaseConn;
     type Error = BaseError;
     type Future = BaseFuture;
-    fn poll_ready(&mut self, cx: &mut std::task::Context<'_>) -> Poll<Result<(), Self::Error>> {
-        match self {
-            Self::TcpDirect(s) => s.poll_ready(cx).map_err(BaseError::TcpDirect),
-            Self::HttpTunnel(s) => s.poll_ready(cx).map_err(BaseError::HttpTunnel),
-        }
-    }
-    fn call(&mut self, req: http::Uri) -> Self::Future {
+    fn call(&self, req: http::Uri) -> Self::Future {
         match self {
             Self::TcpDirect(s) => BaseFuture::TcpDirect(s.call(req)),
             Self::HttpTunnel(s) => BaseFuture::HttpTunnel(s.call(req)),
@@ -186,9 +178,11 @@ impl tower_service::Service<http::Uri> for BaseConnector {
     }
 }
 
-type Inner = capture::CaptureConnector<
-    tls::CaptureMaybeHttpsRef<'static>,
-    tls::MaybeHttpsConnector<capture::CaptureConnector<capture::RefConfig<'static>, BaseConnector>>,
+type Inner = tokio_io::TokioIoService<
+    capture::Capture<
+        https::CaptureRef<'static>,
+        https::MaybeHttpsConnector<capture::Capture<capture::RefConfig<'static>, BaseConnector>>,
+    >,
 >;
 
 #[pin_project::pin_project]
@@ -256,9 +250,27 @@ impl std::future::Future for DefaultFuture {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct DefaultConnector(Inner);
 impl DefaultConnector {
+    fn new_inner(
+        root: BorrowedFd<'_>,
+        capture: bool,
+        capture_cfg: &'static capture::CaptureConfig,
+        base: BaseConnector,
+    ) -> anyhow::Result<Self> {
+        let inner = ServiceBuilder::new(base)
+            .once_layer(capture::CaptureLayer::new(capture::RefConfig(capture_cfg)))
+            .once_layer(https::MaybeHttpsLayer::new(root, true)?)
+            .once_layer(capture::CaptureLayer::new(https::CaptureRef(if capture {
+                &tls::CaptureAll::CONFIG
+            } else {
+                &tls::CaptureHandshake::CONFIG
+            })))
+            .once_layer(tokio_io::TokioIoLayer::new())
+            .build();
+        Ok(Self(inner))
+    }
     pub(crate) fn new_direct(
         root: BorrowedFd<'_>,
         runtime: &tokio::runtime::Runtime,
@@ -267,46 +279,35 @@ impl DefaultConnector {
         capture: bool,
         direct_connector_sock: &str,
     ) -> anyhow::Result<Self> {
-        Ok(Self(capture::CaptureConnector::new(
-            tls::CaptureMaybeHttpsRef(if capture {
-                &tls::CaptureMaybeHttpsAll::CONFIG
+        let base = ServiceBuilder::new(
+            if capture {
+                direct::TcpConnector::new_root_captured(
+                    root,
+                    fetcher_id,
+                    runtime,
+                    direct_connector_sock,
+                )
             } else {
-                &tls::CaptureMaybeHttpsHandshake::CONFIG
-            }),
-            tls::MaybeHttpsConnector::new(
-                root,
-                capture::CaptureConnector::new(
-                    capture::RefConfig(if capture {
-                        &tcp_log::CaptureAll::CONFIG
-                    } else {
-                        &tcp_log::CaptureHandshake::CONFIG
-                    }),
-                    BaseConnector::TcpDirect(tcp_log::TcpLogService::new(
-                        conn_meta::ConnMetaService::with_connector(
-                            root,
-                            id_generator,
-                            tokio_io::TokioIoService(
-                                if capture {
-                                    direct::TcpConnector::new_root_captured(
-                                        root,
-                                        fetcher_id,
-                                        runtime,
-                                        direct_connector_sock,
-                                    )
-                                } else {
-                                    direct::TcpConnector::new_no_capture(
-                                        fetcher_id,
-                                        runtime,
-                                        direct_connector_sock,
-                                    )
-                                }
-                                .context("failed to init connector")?,
-                            ),
-                        )?,
-                    )),
-                ),
-            )?,
-        )))
+                direct::TcpConnector::new_no_capture(fetcher_id, runtime, direct_connector_sock)
+            }
+            .context("failed to init connector")?,
+        )
+        .once_layer(conn_meta::ConnMetaLayer::with_connector(
+            root,
+            id_generator,
+        )?)
+        .once_layer(tcp_log::TcpLogLayer::new())
+        .build();
+        Self::new_inner(
+            root,
+            capture,
+            if capture {
+                &tcp_log::CaptureAll::CONFIG
+            } else {
+                &tcp_log::CaptureHandshake::CONFIG
+            },
+            BaseConnector::TcpDirect(base),
+        )
     }
     pub(crate) fn new_proxy_captured(
         root: BorrowedFd<'_>,
@@ -314,34 +315,26 @@ impl DefaultConnector {
         capture: bool,
         proxy_sock: &str,
     ) -> anyhow::Result<Self> {
-        Ok(Self(capture::CaptureConnector::new(
-            tls::CaptureMaybeHttpsRef(if capture {
-                &tls::CaptureMaybeHttpsAll::CONFIG
-            } else {
-                &tls::CaptureMaybeHttpsHandshake::CONFIG
-            }),
-            tls::MaybeHttpsConnector::new(
+        let base = ServiceBuilder::new(unix::UnixConnector::new())
+            .once_layer(http_tunnel::HttpTunnelLayer::new(Arc::new(
+                std::os::unix::net::SocketAddr::from_pathname(proxy_sock)
+                    .context("invalid socket path")?,
+            )))
+            .once_layer(conn_meta::ConnMetaLayer::with_connector(
                 root,
-                capture::CaptureConnector::new(
-                    capture::RefConfig(if capture {
-                        &CaptureProxyAll::CONFIG
-                    } else {
-                        &CaptureProxyHandshake::CONFIG
-                    }),
-                    BaseConnector::HttpTunnel(conn_meta::ConnMetaService::with_connector(
-                        root,
-                        id_generator,
-                        hyper_util::client::legacy::connect::proxy::Tunnel::new(
-                            http::Uri::from_static("http://localhost"),
-                            tokio_io::TokioIoService(
-                                unix::UnixConnector::from_path(proxy_sock)
-                                    .context("failed to build unix connector")?,
-                            ),
-                        ),
-                    )?),
-                ),
-            )?,
-        )))
+                id_generator,
+            )?)
+            .build();
+        Self::new_inner(
+            root,
+            capture,
+            if capture {
+                &CaptureProxyAll::CONFIG
+            } else {
+                &CaptureProxyHandshake::CONFIG
+            },
+            BaseConnector::HttpTunnel(base),
+        )
     }
 }
 
@@ -349,11 +342,12 @@ impl tower_service::Service<http::Uri> for DefaultConnector {
     type Response = DefaultConn;
     type Error = DefaultError;
     type Future = DefaultFuture;
+    #[inline]
     fn poll_ready(
         &mut self,
-        cx: &mut std::task::Context<'_>,
+        _: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Result<(), Self::Error>> {
-        self.0.poll_ready(cx).map_err(DefaultError)
+        Poll::Ready(Ok(()))
     }
     fn call(&mut self, req: http::Uri) -> Self::Future {
         DefaultFuture(self.0.call(req))

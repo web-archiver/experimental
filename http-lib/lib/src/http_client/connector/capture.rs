@@ -1,5 +1,6 @@
 use std::{ffi::CStr, future::Future, io::Write, num::NonZeroU64, os::fd::BorrowedFd, task::Poll};
 
+use webar_core::service::{OnceLayer, Service};
 use webar_http_lib_core::utils::create_file;
 
 use super::conn_meta::ConnectionMeta;
@@ -102,6 +103,29 @@ impl<C: hyper::rt::Read> hyper::rt::Read for Connection<C> {
         }
     }
 }
+impl<C: tokio::io::AsyncRead> tokio::io::AsyncRead for Connection<C> {
+    fn poll_read(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        let self_ = self.project();
+        let mut wrapped_buf = tokio::io::ReadBuf::uninit(unsafe { buf.unfilled_mut() });
+        match tokio::io::AsyncRead::poll_read(self_.conn, cx, &mut wrapped_buf) {
+            Poll::Pending => Poll::Pending,
+            Poll::Ready(Ok(())) => {
+                let data = wrapped_buf.filled();
+                if let Err(e) = self_.rx.write(data) {
+                    return Poll::Ready(Err(e));
+                }
+                let l = data.len();
+                buf.advance(l);
+                Poll::Ready(Ok(()))
+            }
+            Poll::Ready(Err(e)) => Poll::Ready(Err(e)),
+        }
+    }
+}
 impl<C: hyper::rt::Write> hyper::rt::Write for Connection<C> {
     fn poll_write(
         self: std::pin::Pin<&mut Self>,
@@ -131,6 +155,38 @@ impl<C: hyper::rt::Write> hyper::rt::Write for Connection<C> {
         self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> Poll<Result<(), std::io::Error>> {
+        self.project().conn.poll_shutdown(cx)
+    }
+}
+impl<C: tokio::io::AsyncWrite> tokio::io::AsyncWrite for Connection<C> {
+    fn poll_write(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        let self_ = self.project();
+        match self_.conn.poll_write(cx, buf) {
+            Poll::Pending => Poll::Pending,
+            Poll::Ready(Ok(sz)) => {
+                let data = &buf[..sz];
+                if let Err(e) = self_.tx.write(data) {
+                    return Poll::Ready(Err(e));
+                }
+                Poll::Ready(Ok(sz))
+            }
+            Poll::Ready(Err(e)) => Poll::Ready(Err(e)),
+        }
+    }
+    fn poll_flush(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        self.project().conn.poll_flush(cx)
+    }
+    fn poll_shutdown(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> Poll<std::io::Result<()>> {
         self.project().conn.poll_shutdown(cx)
     }
 }
@@ -199,32 +255,40 @@ where
 }
 
 #[derive(Debug, Clone)]
-pub struct CaptureConnector<Cfg, S> {
+pub struct Capture<Cfg, S> {
     inner: S,
     config: Cfg,
 }
-impl<Cfg, S> CaptureConnector<Cfg, S> {
-    pub fn new(config: Cfg, inner: S) -> Self {
-        Self { inner, config }
-    }
-}
 
-impl<Cfg, R, S> tower::Service<R> for CaptureConnector<Cfg, S>
+impl<Cfg, R, S> Service<R> for Capture<Cfg, S>
 where
     Cfg: Config<S::Response>,
-    S: tower_service::Service<R>,
+    S: Service<R>,
     S::Response: hyper_util::client::legacy::connect::Connection + ConnectionMeta,
 {
     type Error = Error<S::Error>;
     type Future = ConnectFuture<Cfg, S::Future>;
     type Response = Connection<S::Response>;
-    fn poll_ready(&mut self, cx: &mut std::task::Context<'_>) -> Poll<Result<(), Self::Error>> {
-        self.inner.poll_ready(cx).map_err(Error::Inner)
-    }
-    fn call(&mut self, req: R) -> Self::Future {
+    fn call(&self, req: R) -> Self::Future {
         ConnectFuture {
             inner: self.inner.call(req),
             config: self.config.clone(),
+        }
+    }
+}
+
+pub struct CaptureLayer<Cfg>(Cfg);
+impl<Cfg> CaptureLayer<Cfg> {
+    pub(crate) fn new(config: Cfg) -> Self {
+        Self(config)
+    }
+}
+impl<Cfg, S> OnceLayer<S> for CaptureLayer<Cfg> {
+    type Service = Capture<Cfg, S>;
+    fn layer_once(self, inner: S) -> Self::Service {
+        Capture {
+            config: self.0,
+            inner,
         }
     }
 }
