@@ -5,6 +5,8 @@ use std::{
     task::Poll,
 };
 
+use webar_core::service::{OnceLayer, Service};
+
 #[derive(Debug, thiserror::Error)]
 enum CookieParseError {
     #[error("header is not utf8: {0}")]
@@ -73,40 +75,30 @@ enum SetReqHeaderError {
     InvalidReqHeader(#[source] http::header::InvalidHeaderValue),
 }
 #[derive(Debug, Clone)]
-pub struct CookieService<S> {
+pub struct Cookie<S> {
     store: Arc<RwLock<cookie_store::CookieStore>>,
-    header_buf: String,
     inner: S,
 }
-impl<S> CookieService<S> {
-    pub fn new(store: cookie_store::CookieStore, inner: S) -> Self {
-        Self {
-            store: Arc::new(RwLock::new(store)),
-            header_buf: String::new(),
-            inner,
-        }
-    }
-}
-impl<S> CookieService<S> {
+impl<S> Cookie<S> {
     fn set_req_header(
-        &mut self,
+        &self,
         url: &url::Url,
         req: &mut http::request::Parts,
     ) -> Result<(), SetReqHeaderError> {
         let hdr = {
             let store = self.store.read().unwrap();
-            self.header_buf.clear();
+            let mut hdr = String::new();
             let mut iter = store.get_request_values(url);
             if let Some((k, v)) = iter.next() {
-                let _ = write!(&mut self.header_buf, "{k}={v}");
+                let _ = write!(&mut hdr, "{k}={v}");
                 for (k, v) in iter {
-                    let _ = write!(&mut self.header_buf, "; {k}={v}");
+                    let _ = write!(&mut hdr, "; {k}={v}");
                 }
             }
-            if self.header_buf.is_empty() {
+            if hdr.is_empty() {
                 return Ok(());
             }
-            http::HeaderValue::from_str(&self.header_buf)
+            http::HeaderValue::from_maybe_shared(hdr)
                 .map_err(SetReqHeaderError::InvalidReqHeader)?
         };
         req.headers.append(http::header::COOKIE, hdr);
@@ -114,26 +106,19 @@ impl<S> CookieService<S> {
         Ok(())
     }
 }
-impl<S, B, R> tower::Service<super::MessageReq<B>> for CookieService<S>
+impl<S, B, R> Service<super::MessageReq<B>> for Cookie<S>
 where
-    S: tower::Service<super::MessageReq<B>>,
+    S: Service<super::MessageReq<B>>,
     S::Future: Future<Output = Result<R, S::Error>>,
     R: super::Response,
 {
     type Response = R;
     type Error = S::Error;
     type Future = CookieFuture<S::Future>;
-    fn poll_ready(
-        &mut self,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Result<(), Self::Error>> {
-        self.inner.poll_ready(cx)
-    }
-    fn call(&mut self, mut req: super::MessageReq<B>) -> Self::Future {
+    fn call(&self, mut req: super::MessageReq<B>) -> Self::Future {
         if let Err(e) = self.set_req_header(&req.url, &mut req.parts) {
             tracing::warn!(
                 url = req.url.as_str(),
-                header = tracing::field::display(self.header_buf.escape_debug()),
                 err = &e as &dyn std::error::Error,
                 "skipped to set request cookie due to error: {e}"
             );
@@ -142,6 +127,23 @@ where
             url: Arc::clone(&req.url),
             store: Arc::clone(&self.store),
             inner: self.inner.call(req),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct CookieLayer(Arc<RwLock<cookie_store::CookieStore>>);
+impl CookieLayer {
+    pub fn new(store: cookie_store::CookieStore) -> Self {
+        Self(Arc::new(RwLock::new(store)))
+    }
+}
+impl<S> OnceLayer<S> for CookieLayer {
+    type Service = Cookie<S>;
+    fn layer_once(self, inner: S) -> Self::Service {
+        Cookie {
+            store: self.0,
+            inner,
         }
     }
 }

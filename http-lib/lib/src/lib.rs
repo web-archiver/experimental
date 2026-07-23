@@ -69,6 +69,7 @@ pub struct FetcherConfig<'a> {
     pub shared_object_index: Option<&'a str>,
     pub cookie_store: Option<http_client::cookie::CookieStore>,
     pub primary_connector_capture: bool,
+    pub req_per_sec: u32,
 }
 impl Default for FetcherConfig<'_> {
     fn default() -> Self {
@@ -77,6 +78,7 @@ impl Default for FetcherConfig<'_> {
             shared_object_index: None,
             cookie_store: None,
             primary_connector_capture: true,
+            req_per_sec: 32,
         }
     }
 }
@@ -106,6 +108,7 @@ fn run(
             &uuid,
             &rt,
             cfgs.primary_connector_capture,
+            cfgs.req_per_sec,
             connector_socket,
         ),
         Connector::HttpTunnel { tunnel_socket } => http_client::Client::new_proxy(
@@ -114,6 +117,7 @@ fn run(
             Arc::clone(&blob_store),
             cfgs.cookie_store,
             cfgs.primary_connector_capture,
+            cfgs.req_per_sec,
             tunnel_socket,
         ),
     }

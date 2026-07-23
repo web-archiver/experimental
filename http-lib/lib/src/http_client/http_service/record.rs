@@ -1,5 +1,4 @@
 use std::{
-    fmt::Write,
     future::Future,
     ops::DerefMut,
     os::fd::BorrowedFd,
@@ -12,6 +11,7 @@ use bytes::Bytes;
 use webar_core::{
     codec::gcbor::{support, EncodedVal, SomeType, ToGCbor, ValueBuf},
     digest::Digest,
+    service::{OnceLayer, Service},
 };
 use webar_http_lib_core::{blob::Info as BlobInfo, utils::create_file};
 
@@ -218,44 +218,19 @@ where
 
 #[derive(Clone)]
 pub struct RecordService<S> {
-    uri_buf: String,
     blob_store: Arc<BlobStore>,
     state: Arc<Mutex<State>>,
     inner: S,
 }
-impl<S> RecordService<S> {
-    pub(crate) fn new(
-        root: BorrowedFd<'_>,
-        blob_store: Arc<BlobStore>,
-        inner: S,
-    ) -> Result<Self, rustix::io::Errno> {
-        let log_file = create_file(root, c"http_record.bin")?;
-        Ok(Self {
-            uri_buf: String::new(),
-            blob_store,
-            state: Arc::new(Mutex::new(State {
-                log_file: log_file.into(),
-                buf: ValueBuf::new(),
-            })),
-            inner,
-        })
-    }
-}
-impl<S> tower::Service<super::MessageReq<super::ReqBody>> for RecordService<S>
+impl<S> Service<super::MessageReq<super::ReqBody>> for RecordService<S>
 where
-    S: tower::Service<super::MessageReq<super::ReqBody>>,
+    S: Service<super::MessageReq<super::ReqBody>>,
     S::Future: Future<Output = Result<timing::TimingResponse, S::Error>>,
 {
     type Response = RecordResponse<timing::TimingResponse>;
     type Error = Error<S::Error>;
     type Future = RecordFuture<S::Future>;
-    fn poll_ready(
-        &mut self,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Result<(), Self::Error>> {
-        self.inner.poll_ready(cx).map_err(Error::Inner)
-    }
-    fn call(&mut self, mut req: super::MessageReq<super::ReqBody>) -> Self::Future {
+    fn call(&self, mut req: super::MessageReq<super::ReqBody>) -> Self::Future {
         let mut buf = [0; uuid::fmt::Hyphenated::LENGTH];
 
         let req_id = uuid::Uuid::new_v8({
@@ -270,8 +245,7 @@ where
             http::HeaderValue::from_str(req_id.as_hyphenated().encode_lower(&mut buf)).unwrap(),
         );
 
-        self.uri_buf.clear();
-        let _ = write!(&mut self.uri_buf, "{}", req.parts.uri);
+        let uri = req.parts.uri.to_string();
         let request_body = req.data.0.as_ref().map(|b| RequestBody {
             info: match req.parts.extensions.get::<BlobInfo>() {
                 Some(v) => {
@@ -289,7 +263,7 @@ where
         let req_info = Request {
             id: RequestId::XRequestId(req_id),
             method: req.parts.method.as_str(),
-            url: &self.uri_buf,
+            url: &uri,
             headers: from_header_map(&req.parts.headers),
             body: request_body.as_ref().map(|b| &b.digest),
             trailers: None,
@@ -306,6 +280,36 @@ where
             blob_store: Arc::clone(&self.blob_store),
             state: Arc::clone(&self.state),
             fut: self.inner.call(req),
+        }
+    }
+}
+
+pub struct RecordLayer {
+    blob_store: Arc<BlobStore>,
+    state: Arc<Mutex<State>>,
+}
+impl RecordLayer {
+    pub(crate) fn new(
+        root: BorrowedFd<'_>,
+        blob_store: Arc<BlobStore>,
+    ) -> Result<Self, rustix::io::Errno> {
+        let log_file = create_file(root, c"http_record.bin")?;
+        Ok(Self {
+            blob_store,
+            state: Arc::new(Mutex::new(State {
+                log_file: log_file.into(),
+                buf: ValueBuf::new(),
+            })),
+        })
+    }
+}
+impl<S> OnceLayer<S> for RecordLayer {
+    type Service = RecordService<S>;
+    fn layer_once(self, inner: S) -> Self::Service {
+        RecordService {
+            blob_store: self.blob_store,
+            state: self.state,
+            inner,
         }
     }
 }

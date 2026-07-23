@@ -1,5 +1,6 @@
 use http::{header, HeaderName, HeaderValue};
-use tower::Service;
+
+use webar_core::service::{OnceLayer, Service};
 
 const PRIORITY: HeaderName = HeaderName::from_static("priority");
 const SEC_CH_UA_MOBILE: HeaderName = HeaderName::from_static("sec-ch-ua-mobile");
@@ -43,29 +44,32 @@ fn add_default_headers(req: &mut http::request::Parts) {
 }
 
 #[derive(Debug, Clone)]
-pub struct BrowserHeaderService<S> {
+pub struct BrowserHeaders<S> {
     inner: S,
 }
-impl<S> BrowserHeaderService<S> {
-    pub fn new(inner: S) -> Self {
-        Self { inner }
-    }
-}
-impl<S, B> Service<super::MessageReq<B>> for BrowserHeaderService<S>
+impl<S, B> Service<super::MessageReq<B>> for BrowserHeaders<S>
 where
     S: Service<super::MessageReq<B>>,
 {
     type Response = S::Response;
     type Error = S::Error;
     type Future = S::Future;
-    fn poll_ready(
-        &mut self,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Result<(), Self::Error>> {
-        self.inner.poll_ready(cx)
-    }
-    fn call(&mut self, mut req: super::MessageReq<B>) -> Self::Future {
+    fn call(&self, mut req: super::MessageReq<B>) -> Self::Future {
         add_default_headers(&mut req.parts);
         self.inner.call(req)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct BrowserHeadersLayer();
+impl BrowserHeadersLayer {
+    pub(crate) fn new() -> Self {
+        Self()
+    }
+}
+impl<S> OnceLayer<S> for BrowserHeadersLayer {
+    type Service = BrowserHeaders<S>;
+    fn layer_once(self, inner: S) -> Self::Service {
+        BrowserHeaders { inner }
     }
 }

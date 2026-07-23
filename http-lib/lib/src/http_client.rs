@@ -4,9 +4,8 @@ use std::{
 
 use anyhow::Result;
 use http::{HeaderName, HeaderValue, StatusCode};
-use tower::Service;
 
-use webar_core::digest::Digest;
+use webar_core::{digest::Digest, service::Service};
 
 use crate::blob::BlobStore;
 use http_service::Response as _;
@@ -151,6 +150,7 @@ impl Client {
         fetcher_id: &uuid::Uuid,
         runtime: &tokio::runtime::Runtime,
         capture: bool,
+        req_per_sec: u32,
         connector_sock: &str,
     ) -> anyhow::Result<Self> {
         Ok(Self(http_service::DefaultService::new(
@@ -158,6 +158,7 @@ impl Client {
             id_generator.clone(),
             blob_store,
             cookies.unwrap_or_default().0,
+            req_per_sec,
             connector::DefaultConnector::new_direct(
                 root,
                 runtime,
@@ -174,6 +175,7 @@ impl Client {
         blob_store: Arc<BlobStore>,
         cookies: Option<cookie::CookieStore>,
         capture: bool,
+        req_per_sec: u32,
         proxy_sock: &str,
     ) -> anyhow::Result<Self> {
         Ok(Self(http_service::DefaultService::new(
@@ -181,6 +183,7 @@ impl Client {
             id_generator.clone(),
             blob_store,
             cookies.unwrap_or_default().0,
+            req_per_sec,
             connector::DefaultConnector::new_proxy_captured(
                 root,
                 id_generator,
@@ -198,9 +201,6 @@ impl Client {
         }
     }
     pub async fn execute(&mut self, req: Request) -> Result<Response, HttpError> {
-        std::future::poll_fn(|cx| self.0.poll_ready(cx))
-            .await
-            .map_err(|e| HttpError(InnerError::Inner(e)))?;
         match self.0.call(req.0).await {
             Ok(r) => Ok(Response(r)),
             Err(e) => Err(HttpError(InnerError::Inner(e))),

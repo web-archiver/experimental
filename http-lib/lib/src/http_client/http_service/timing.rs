@@ -11,7 +11,11 @@ use indicatif::ProgressStyle;
 use tracing::Instrument;
 use tracing_indicatif::span_ext::IndicatifSpanExt;
 
-use webar_core::{codec::gcbor::ToGCbor, time::Timestamp};
+use webar_core::{
+    codec::gcbor::ToGCbor,
+    service::{OnceLayer, Service},
+    time::Timestamp,
+};
 
 const BASE_TEMPLATE: &str = "{span_child_prefix} {spinner} {msg}";
 const BAR_TEMPLATE: &str = concat!(
@@ -129,14 +133,9 @@ impl super::Response for TimingResponse {
 pub struct TimingService<S> {
     inner: S,
 }
-impl<S> TimingService<S> {
-    pub fn new(inner: S) -> Self {
-        Self { inner }
-    }
-}
-impl<B, S> tower_service::Service<super::MessageReq<super::ReqBody>> for TimingService<S>
+impl<B, S> Service<super::MessageReq<super::ReqBody>> for TimingService<S>
 where
-    S: tower_service::Service<http::Request<TimedBody>, Response = http::Response<B>>,
+    S: Service<http::Request<TimedBody>, Response = http::Response<B>>,
     S::Future: Send + Sync + 'static,
     B: http_body::Body + Send + Sync + 'static,
 {
@@ -145,13 +144,7 @@ where
     type Future = Pin<
         Box<dyn std::future::Future<Output = Result<Self::Response, Self::Error>> + Send + Sync>,
     >;
-    fn poll_ready(
-        &mut self,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Result<(), Self::Error>> {
-        self.inner.poll_ready(cx).map_err(Error::Request)
-    }
-    fn call(&mut self, req: super::MessageReq<super::ReqBody>) -> Self::Future {
+    fn call(&self, req: super::MessageReq<super::ReqBody>) -> Self::Future {
         let span = tracing::info_span!("message_timing", indicatif.pb_show = tracing::field::Empty);
 
         let sent_header = Arc::new(OnceLock::new());
@@ -229,5 +222,18 @@ where
             }
             .instrument(span),
         )
+    }
+}
+
+pub struct TimingLayer();
+impl TimingLayer {
+    pub(crate) fn new() -> Self {
+        Self()
+    }
+}
+impl<S> OnceLayer<S> for TimingLayer {
+    type Service = TimingService<S>;
+    fn layer_once(self, inner: S) -> Self::Service {
+        TimingService { inner }
     }
 }

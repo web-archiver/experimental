@@ -1,6 +1,9 @@
 use tracing::{instrument::Instrumented, Instrument};
 
-use webar_core::codec::gcbor::GCborCodec;
+use webar_core::{
+    codec::gcbor::GCborCodec,
+    service::{OnceLayer, Service},
+};
 
 use crate::local_id;
 
@@ -30,28 +33,14 @@ pub struct RequestIdService<S> {
     id_generator: local_id::IdGenerator,
     inner: S,
 }
-impl<S> RequestIdService<S> {
-    pub(crate) fn new(id_generator: local_id::IdGenerator, inner: S) -> Self {
-        Self {
-            id_generator,
-            inner,
-        }
-    }
-}
-impl<S, D> tower_service::Service<super::Request<D>> for RequestIdService<S>
+impl<S, D> Service<super::Request<D>> for RequestIdService<S>
 where
-    S: tower_service::Service<WithRequestId<super::Request<D>>>,
+    S: Service<WithRequestId<super::Request<D>>>,
 {
     type Response = S::Response;
     type Error = S::Error;
     type Future = tracing::instrument::Instrumented<S::Future>;
-    fn poll_ready(
-        &mut self,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Result<(), Self::Error>> {
-        self.inner.poll_ready(cx)
-    }
-    fn call(&mut self, req: super::Request<D>) -> Self::Future {
+    fn call(&self, req: super::Request<D>) -> Self::Future {
         let request_id = RequestId(self.id_generator.generate());
         self.inner
             .call(WithRequestId {
@@ -62,6 +51,22 @@ where
                 "http_request",
                 request_id = tracing::field::valuable(&request_id)
             ))
+    }
+}
+
+pub struct RequestIdLayer(local_id::IdGenerator);
+impl RequestIdLayer {
+    pub(crate) fn new(id_generator: local_id::IdGenerator) -> Self {
+        Self(id_generator)
+    }
+}
+impl<S> OnceLayer<S> for RequestIdLayer {
+    type Service = RequestIdService<S>;
+    fn layer_once(self, inner: S) -> Self::Service {
+        RequestIdService {
+            id_generator: self.0,
+            inner,
+        }
     }
 }
 
@@ -90,28 +95,14 @@ pub struct MessageIdService<S> {
     id_generator: local_id::IdGenerator,
     inner: S,
 }
-impl<S> MessageIdService<S> {
-    pub(crate) fn new(id_generator: local_id::IdGenerator, inner: S) -> Self {
-        Self {
-            id_generator,
-            inner,
-        }
-    }
-}
-impl<S, D> tower_service::Service<WithRequestId<super::Request<D>>> for MessageIdService<S>
+impl<S, D> Service<WithRequestId<super::Request<D>>> for MessageIdService<S>
 where
-    S: tower_service::Service<super::MessageReq<D>>,
+    S: Service<super::MessageReq<D>>,
 {
     type Response = S::Response;
     type Error = S::Error;
     type Future = Instrumented<S::Future>;
-    fn poll_ready(
-        &mut self,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Result<(), Self::Error>> {
-        self.inner.poll_ready(cx)
-    }
-    fn call(&mut self, req: WithRequestId<super::Request<D>>) -> Self::Future {
+    fn call(&self, req: WithRequestId<super::Request<D>>) -> Self::Future {
         let message_id = MessageId(self.id_generator.generate());
         self.inner
             .call(super::MessageReq {
@@ -125,5 +116,20 @@ where
                 "http_message",
                 message_id = tracing::field::valuable(&message_id)
             ))
+    }
+}
+pub struct MessageIdLayer(local_id::IdGenerator);
+impl MessageIdLayer {
+    pub(crate) fn new(id_generator: local_id::IdGenerator) -> Self {
+        Self(id_generator)
+    }
+}
+impl<S> OnceLayer<S> for MessageIdLayer {
+    type Service = MessageIdService<S>;
+    fn layer_once(self, inner: S) -> Self::Service {
+        MessageIdService {
+            id_generator: self.0,
+            inner,
+        }
     }
 }

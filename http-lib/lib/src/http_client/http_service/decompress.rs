@@ -1,6 +1,6 @@
 use std::{future::Future, task::Poll};
 
-use tower::Service;
+use webar_core::service::{OnceLayer, Service};
 
 #[derive(Debug, thiserror::Error)]
 pub enum DecompressError<E> {
@@ -70,11 +70,6 @@ where
 
 #[derive(Debug, Clone)]
 pub struct Decompress<S>(S);
-impl<S> Decompress<S> {
-    pub(crate) fn new(inner: S) -> Self {
-        Self(inner)
-    }
-}
 impl<S, B> Service<super::MessageReq<B>> for Decompress<S>
 where
     S: Service<super::MessageReq<B>>,
@@ -83,17 +78,25 @@ where
     type Response = S::Response;
     type Error = DecompressError<S::Error>;
     type Future = DecompressFuture<S::Future>;
-    fn poll_ready(
-        &mut self,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Result<(), Self::Error>> {
-        self.0.poll_ready(cx).map_err(DecompressError::Inner)
-    }
-    fn call(&mut self, mut req: super::MessageReq<B>) -> Self::Future {
+    fn call(&self, mut req: super::MessageReq<B>) -> Self::Future {
         req.parts.headers.insert(
             http::header::ACCEPT_ENCODING,
             const { http::HeaderValue::from_static("gzip, deflate, br, zstd") },
         );
         DecompressFuture(self.0.call(req))
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct DecompressLayer();
+impl DecompressLayer {
+    pub(crate) fn new() -> Self {
+        Self()
+    }
+}
+impl<S> OnceLayer<S> for DecompressLayer {
+    type Service = Decompress<S>;
+    fn layer_once(self, inner: S) -> Self::Service {
+        Decompress(inner)
     }
 }

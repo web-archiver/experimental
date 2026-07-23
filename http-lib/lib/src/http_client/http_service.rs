@@ -1,7 +1,5 @@
 use std::{convert::Infallible, os::fd::BorrowedFd, sync::Arc};
 
-use tower::Service;
-
 pub trait Response {
     fn status(&self) -> http::StatusCode;
     fn headers(&self) -> &http::HeaderMap<http::HeaderValue>;
@@ -45,20 +43,26 @@ impl http_body::Body for ReqBody {
 pub mod browser_header;
 pub mod cookie;
 pub mod decompress;
+pub mod hyper_client;
 pub mod id;
+pub mod limit;
 pub mod record;
 pub mod retry;
 pub mod timing;
 
-type DefaultInner<C> = id::RequestIdService<
-    retry::RetryService<
-        id::MessageIdService<
-            cookie::CookieService<
-                decompress::Decompress<
-                    browser_header::BrowserHeaderService<
-                        record::RecordService<
-                            timing::TimingService<
-                                hyper_util::client::legacy::Client<C, timing::TimedBody>,
+type DefaultInner<C> = limit::Limit<
+    id::RequestIdService<
+        retry::RetryService<
+            Arc<
+                id::MessageIdService<
+                    cookie::Cookie<
+                        decompress::Decompress<
+                            browser_header::BrowserHeaders<
+                                record::RecordService<
+                                    timing::TimingService<
+                                        hyper_client::Client<C, timing::TimedBody>,
+                                    >,
+                                >,
                             >,
                         >,
                     >,
@@ -93,49 +97,36 @@ impl<C> DefaultService<C> {
         id_generator: crate::local_id::IdGenerator,
         blob_store: Arc<crate::blob::BlobStore>,
         cookies: cookie_store::CookieStore,
+        req_per_sec: u32,
         connector: C,
     ) -> Result<Self, rustix::io::Errno>
     where
         C: hyper_util::client::legacy::connect::Connect + Clone + Send + Sync + 'static,
     {
-        Ok(Self(id::RequestIdService::new(
-            id_generator.clone(),
-            retry::RetryService::new(id::MessageIdService::new(
-                id_generator,
-                cookie::CookieService::new(
-                    cookies,
-                    decompress::Decompress::new(browser_header::BrowserHeaderService::new(
-                        record::RecordService::new(
-                            root,
-                            blob_store,
-                            timing::TimingService::new(
-                                hyper_util::client::legacy::Builder::new(
-                                    hyper_util::rt::TokioExecutor::new(),
-                                )
-                                .set_host(false)
-                                .build(connector),
-                            ),
-                        )?,
-                    )),
-                ),
-            )),
-        )))
+        let inner =
+            webar_core::service::builder::ServiceBuilder::new(hyper_client::Client::new(connector))
+                .once_layer(timing::TimingLayer::new())
+                .once_layer(record::RecordLayer::new(root, blob_store)?)
+                .once_layer(browser_header::BrowserHeadersLayer::new())
+                .once_layer(decompress::DecompressLayer::new())
+                .once_layer(cookie::CookieLayer::new(cookies))
+                .once_layer(id::MessageIdLayer::new(id_generator.clone()))
+                .arc()
+                .once_layer(retry::RetryLayer::new())
+                .once_layer(id::RequestIdLayer::new(id_generator))
+                .once_layer(limit::LimitLayer::new(req_per_sec))
+                .build();
+        Ok(Self(inner))
     }
 }
-impl<C> Service<DefaultReq> for DefaultService<C>
+impl<C> webar_core::service::Service<DefaultReq> for DefaultService<C>
 where
     C: hyper_util::client::legacy::connect::Connect + Clone + Send + Sync + 'static,
 {
-    type Response = <DefaultInner<C> as Service<DefaultReq>>::Response;
-    type Error = <DefaultInner<C> as Service<DefaultReq>>::Error;
-    type Future = <DefaultInner<C> as Service<DefaultReq>>::Future;
-    fn poll_ready(
-        &mut self,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Result<(), Self::Error>> {
-        self.0.poll_ready(cx)
-    }
-    fn call(&mut self, req: DefaultReq) -> Self::Future {
+    type Response = <DefaultInner<C> as webar_core::service::Service<DefaultReq>>::Response;
+    type Error = <DefaultInner<C> as webar_core::service::Service<DefaultReq>>::Error;
+    type Future = <DefaultInner<C> as webar_core::service::Service<DefaultReq>>::Future;
+    fn call(&self, req: DefaultReq) -> Self::Future {
         self.0.call(req)
     }
 }
