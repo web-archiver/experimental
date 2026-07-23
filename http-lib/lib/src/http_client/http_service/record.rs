@@ -15,7 +15,7 @@ use webar_core::{
 };
 use webar_http_lib_core::{blob::Info as BlobInfo, utils::create_file};
 
-use super::{id, timing};
+use super::{id, save_body::SavedData, timing::Timing};
 use crate::{blob::BlobStore, http_client::compressible};
 
 #[derive(ToGCbor)]
@@ -101,24 +101,11 @@ struct RequestBody {
     digest: Digest,
     data: Bytes,
 }
-pub struct RecordResponse<R> {
+pub struct RecordExtra {
     pub(crate) request_id: id::RequestId,
     pub(crate) message_id: id::MessageId,
-    pub(crate) inner: R,
-}
-impl<R: super::Response> super::Response for RecordResponse<R> {
-    fn status(&self) -> http::StatusCode {
-        self.inner.status()
-    }
-    fn headers(&self) -> &http::HeaderMap<http::HeaderValue> {
-        self.inner.headers()
-    }
-    fn body(&self) -> &[u8] {
-        self.inner.body()
-    }
-    fn set_body(&mut self, b: Vec<u8>) {
-        self.inner.set_body(b);
-    }
+    // currently unused
+    // pub(crate) timing: Timing,
 }
 
 #[pin_project::pin_project]
@@ -133,32 +120,15 @@ pub struct RecordFuture<F> {
     fut: F,
 }
 impl<F> RecordFuture<F> {
-    fn record_info<E>(&self, resp: &timing::TimingResponse) -> Result<(), Error<E>> {
+    fn record_info<E, D>(
+        &self,
+        resp: &super::Response<SavedData<D>, Timing>,
+    ) -> Result<(), Error<E>> {
         if let Some(req) = &self.request_body {
             self.blob_store
                 .add_data(&req.digest, req.info.clone(), &req.data)
                 .map_err(Error::BlobStore)?;
         }
-        let resp_body_digest = Digest::hash_buf(&resp.data);
-        self.blob_store
-            .add_data(
-                &resp_body_digest,
-                BlobInfo {
-                    size: resp.data.len() as u64,
-                    is_compressible: if resp
-                        .parts
-                        .headers
-                        .contains_key(&http::header::CONTENT_ENCODING)
-                    {
-                        // already compressed
-                        Some(false)
-                    } else {
-                        compressible::check(&resp.parts.headers, &resp.data)
-                    },
-                },
-                &resp.data,
-            )
-            .map_err(Error::BlobStore)?;
         let msg = Message {
             request_id: self.request_id.clone(),
             message_id: self.message_id.clone(),
@@ -170,12 +140,12 @@ impl<F> RecordFuture<F> {
                     .unwrap()
                     .local_id,
             },
-            timing: &resp.timing,
+            timing: &resp.extra,
             request: &self.request,
             response: Response {
                 status: resp.parts.status.as_u16(),
                 headers: from_header_map(&resp.parts.headers),
-                body: &resp_body_digest,
+                body: &resp.data.digest,
                 trailers: resp.trailers.as_ref().map(from_header_map),
             },
         };
@@ -192,11 +162,11 @@ impl<F> RecordFuture<F> {
         Ok(())
     }
 }
-impl<F, E> Future for RecordFuture<F>
+impl<F, D, E> Future for RecordFuture<F>
 where
-    F: Future<Output = Result<timing::TimingResponse, E>>,
+    F: Future<Output = Result<super::Response<SavedData<D>, Timing>, E>>,
 {
-    type Output = Result<RecordResponse<timing::TimingResponse>, Error<E>>;
+    type Output = Result<super::Response<SavedData<D>, RecordExtra>, Error<E>>;
     fn poll(
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
@@ -204,10 +174,15 @@ where
         match self.as_mut().project().fut.poll(cx) {
             Poll::Pending => Poll::Pending,
             Poll::Ready(Ok(r)) => match self.record_info(&r) {
-                Ok(()) => Poll::Ready(Ok(RecordResponse {
-                    message_id: self.message_id.clone(),
-                    request_id: self.request_id.clone(),
-                    inner: r,
+                Ok(()) => Poll::Ready(Ok(super::Response {
+                    parts: r.parts,
+                    data: r.data,
+                    trailers: r.trailers,
+                    extra: RecordExtra {
+                        request_id: self.request_id.clone(),
+                        message_id: self.message_id.clone(),
+                        // timing: r.extra,
+                    },
                 })),
                 Err(e) => Poll::Ready(Err(e)),
             },
@@ -222,12 +197,12 @@ pub struct RecordService<S> {
     state: Arc<Mutex<State>>,
     inner: S,
 }
-impl<S> Service<super::MessageReq<super::ReqBody>> for RecordService<S>
+impl<S, D> Service<super::MessageReq<super::ReqBody>> for RecordService<S>
 where
     S: Service<super::MessageReq<super::ReqBody>>,
-    S::Future: Future<Output = Result<timing::TimingResponse, S::Error>>,
+    S::Future: Future<Output = Result<super::Response<SavedData<D>, Timing>, S::Error>>,
 {
-    type Response = RecordResponse<timing::TimingResponse>;
+    type Response = super::Response<SavedData<D>, RecordExtra>;
     type Error = Error<S::Error>;
     type Future = RecordFuture<S::Future>;
     fn call(&self, mut req: super::MessageReq<super::ReqBody>) -> Self::Future {

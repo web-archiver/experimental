@@ -1,5 +1,6 @@
 use std::{
     convert::Infallible,
+    marker::PhantomData,
     pin::Pin,
     sync::{Arc, LazyLock, OnceLock},
     task::Poll,
@@ -89,57 +90,19 @@ pub enum Error<ER, EB> {
     RecvBody(#[source] EB),
 }
 
-#[derive(Debug)]
-pub struct ResponseBody {
-    pub data: Vec<u8>,
-    pub trailers: Option<http::HeaderMap>,
-}
-
-#[derive(Debug)]
-pub struct TimingResponse {
-    pub(crate) parts: http::response::Parts,
-    pub(crate) data: Vec<u8>,
-    pub(crate) trailers: Option<http::HeaderMap>,
-    pub(crate) timing: Timing,
-}
-impl From<TimingResponse> for http::Response<ResponseBody> {
-    fn from(mut value: TimingResponse) -> Self {
-        value.parts.extensions.insert(value.timing);
-        Self::from_parts(
-            value.parts,
-            ResponseBody {
-                data: value.data,
-                trailers: value.trailers,
-            },
-        )
-    }
-}
-impl super::Response for TimingResponse {
-    fn status(&self) -> http::StatusCode {
-        self.parts.status
-    }
-    fn headers(&self) -> &http::HeaderMap<http::HeaderValue> {
-        &self.parts.headers
-    }
-    fn body(&self) -> &[u8] {
-        &self.data
-    }
-    fn set_body(&mut self, b: Vec<u8>) {
-        self.data = b;
-    }
-}
-
 #[derive(Debug, Clone)]
-pub struct TimingService<S> {
+pub struct TimingService<D, S> {
     inner: S,
+    _phantom: PhantomData<fn() -> D>,
 }
-impl<B, S> Service<super::MessageReq<super::ReqBody>> for TimingService<S>
+impl<B, D, S> Service<super::MessageReq<super::ReqBody>> for TimingService<D, S>
 where
     S: Service<http::Request<TimedBody>, Response = http::Response<B>>,
     S::Future: Send + Sync + 'static,
     B: http_body::Body + Send + Sync + 'static,
+    D: From<Vec<u8>>,
 {
-    type Response = TimingResponse;
+    type Response = super::Response<D, Timing>;
     type Error = Error<S::Error, B::Error>;
     type Future = Pin<
         Box<dyn std::future::Future<Output = Result<Self::Response, Self::Error>> + Send + Sync>,
@@ -207,11 +170,11 @@ where
                 }
                 let recv_body = Timestamp::now();
 
-                Ok(TimingResponse {
+                Ok(super::Response {
                     parts,
-                    data: body_buf,
+                    data: D::from(body_buf),
                     trailers: if has_trailers { Some(trailers) } else { None },
-                    timing: Timing {
+                    extra: Timing {
                         start: start_ts,
                         sent_header: *sent_header.wait(),
                         sent_body: *sent_body.wait(),
@@ -225,15 +188,18 @@ where
     }
 }
 
-pub struct TimingLayer();
-impl TimingLayer {
+pub struct TimingLayer<D>(PhantomData<fn() -> D>);
+impl<D> TimingLayer<D> {
     pub(crate) fn new() -> Self {
-        Self()
+        Self(PhantomData)
     }
 }
-impl<S> OnceLayer<S> for TimingLayer {
-    type Service = TimingService<S>;
+impl<S, D> OnceLayer<S> for TimingLayer<D> {
+    type Service = TimingService<D, S>;
     fn layer_once(self, inner: S) -> Self::Service {
-        TimingService { inner }
+        TimingService {
+            _phantom: PhantomData,
+            inner,
+        }
     }
 }

@@ -36,12 +36,12 @@ struct RetryPolicy {
     budget: Arc<tower::retry::budget::TpsBudget>,
 }
 impl RetryPolicy {
-    fn retry<Resp: super::Response, E>(
+    fn retry<D, Ext, E>(
         &mut self,
-        result: &Result<Resp, E>,
+        result: &Result<super::Response<D, Ext>, E>,
     ) -> Option<tokio::time::Sleep> {
         let should_retry = match result {
-            Ok(r) => match r.status() {
+            Ok(r) => match r.parts.status {
                 http::StatusCode::TOO_MANY_REQUESTS => true,
                 http::StatusCode::SERVICE_UNAVAILABLE => true,
                 s if s.is_server_error() => true,
@@ -51,7 +51,7 @@ impl RetryPolicy {
         };
         if should_retry {
             match result.as_ref().ok().and_then(|r| {
-                let hdr = r.headers().get(http::header::RETRY_AFTER)?;
+                let hdr = r.parts.headers.get(http::header::RETRY_AFTER)?;
                 match parse_retry_after(hdr) {
                     Ok(v) if v.is_zero() => None,
                     Ok(v) => Some(v),
@@ -108,11 +108,10 @@ pub struct RetryFuture<S, Req, Fut> {
     #[pin]
     state: State<Fut>,
 }
-impl<S, Req> std::future::Future for RetryFuture<S, Req, S::Future>
+impl<S, Req, D, Ext> std::future::Future for RetryFuture<S, Req, S::Future>
 where
     Req: Clone,
-    S: Service<Req>,
-    S::Response: super::Response,
+    S: Service<Req, Response = super::Response<D, Ext>>,
 {
     type Output = Result<S::Response, S::Error>;
     fn poll(
@@ -149,10 +148,9 @@ pub struct RetryService<S> {
     budget: Arc<tower::retry::budget::TpsBudget>,
     inner: S,
 }
-impl<Req: Clone, S> Service<Req> for RetryService<S>
+impl<Req: Clone, S, D, Ext> Service<Req> for RetryService<S>
 where
-    S: Service<Req> + Clone,
-    S::Response: super::Response,
+    S: Service<Req, Response = super::Response<D, Ext>> + Clone,
 {
     type Response = S::Response;
     type Error = S::Error;

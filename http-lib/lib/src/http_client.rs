@@ -8,7 +8,6 @@ use http::{HeaderName, HeaderValue, StatusCode};
 use webar_core::{digest::Digest, service::Service};
 
 use crate::blob::BlobStore;
-use http_service::Response as _;
 pub use http_service::{
     id::{MessageId, RequestId},
     ReqBody,
@@ -34,19 +33,19 @@ pub struct Request(http_service::DefaultReq);
 pub struct Response(http_service::DefaultResponse);
 impl Response {
     pub fn request_id(&self) -> &RequestId {
-        &self.0.request_id
+        &self.0.extra.request_id
     }
     pub fn message_id(&self) -> &MessageId {
-        &self.0.message_id
+        &self.0.extra.message_id
     }
     pub fn status(&self) -> StatusCode {
-        self.0.inner.parts.status
+        self.0.parts.status
     }
     pub fn get_header(&self, h: http::HeaderName) -> Option<&http::HeaderValue> {
-        self.0.headers().get(h)
+        self.0.parts.headers.get(h)
     }
     pub fn body(&self) -> &[u8] {
-        self.0.body()
+        &self.0.data.data
     }
 }
 

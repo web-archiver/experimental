@@ -16,12 +16,17 @@ pub enum DecompressError<E> {
     Inner(#[source] E),
 }
 
-fn decompress<R: super::Response, E>(resp: &mut R) -> Result<(), DecompressError<E>> {
-    let Some(enc) = resp.headers().get(http::header::CONTENT_ENCODING) else {
-        return Ok(());
+fn decompress<D, Ext, E>(
+    resp: super::Response<D, Ext>,
+) -> Result<super::Response<D, Ext>, DecompressError<E>>
+where
+    D: From<Vec<u8>> + AsRef<[u8]>,
+{
+    let Some(enc) = resp.parts.headers.get(http::header::CONTENT_ENCODING) else {
+        return Ok(resp);
     };
     let mut buf = Vec::new();
-    let body = resp.body();
+    let body = resp.data.as_ref();
     match enc.as_bytes().trim_ascii() {
         b"br" => {
             let mut dec = brotli::Decompressor::new(body, 4 * 1024);
@@ -41,26 +46,30 @@ fn decompress<R: super::Response, E>(resp: &mut R) -> Result<(), DecompressError
         }
         _ => return Err(DecompressError::UnexpectedEncoding { val: enc.clone() }),
     };
-    resp.set_body(buf);
-    Ok(())
+    Ok(super::Response {
+        parts: resp.parts,
+        data: D::from(buf),
+        trailers: resp.trailers,
+        extra: resp.extra,
+    })
 }
 
 #[pin_project::pin_project]
 pub struct DecompressFuture<F>(#[pin] F);
-impl<F, R, E> Future for DecompressFuture<F>
+impl<F, D, Ext, E> Future for DecompressFuture<F>
 where
-    F: Future<Output = Result<R, E>>,
-    R: super::Response,
+    F: Future<Output = Result<super::Response<D, Ext>, E>>,
+    D: From<Vec<u8>> + AsRef<[u8]>,
 {
-    type Output = Result<R, DecompressError<E>>;
+    type Output = Result<super::Response<D, Ext>, DecompressError<E>>;
     fn poll(
         self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Self::Output> {
         match self.project().0.poll(cx) {
             Poll::Pending => Poll::Pending,
-            Poll::Ready(Ok(mut resp)) => match decompress(&mut resp) {
-                Ok(()) => Poll::Ready(Ok(resp)),
+            Poll::Ready(Ok(resp)) => match decompress(resp) {
+                Ok(r) => Poll::Ready(Ok(r)),
                 Err(e) => Poll::Ready(Err(e)),
             },
             Poll::Ready(Err(e)) => Poll::Ready(Err(DecompressError::Inner(e))),
@@ -70,12 +79,12 @@ where
 
 #[derive(Debug, Clone)]
 pub struct Decompress<S>(S);
-impl<S, B> Service<super::MessageReq<B>> for Decompress<S>
+impl<S, B, D, Ext> Service<super::MessageReq<B>> for Decompress<S>
 where
-    S: Service<super::MessageReq<B>>,
-    S::Response: super::Response,
+    S: Service<super::MessageReq<B>, Response = super::Response<D, Ext>>,
+    D: From<Vec<u8>> + AsRef<[u8]>,
 {
-    type Response = S::Response;
+    type Response = super::Response<D, Ext>;
     type Error = DecompressError<S::Error>;
     type Future = DecompressFuture<S::Future>;
     fn call(&self, mut req: super::MessageReq<B>) -> Self::Future {

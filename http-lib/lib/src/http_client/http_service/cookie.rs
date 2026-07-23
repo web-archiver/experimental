@@ -30,12 +30,11 @@ pub struct CookieFuture<F> {
     #[pin]
     inner: F,
 }
-impl<F, R, E> Future for CookieFuture<F>
+impl<F, D, Ext, E> Future for CookieFuture<F>
 where
-    F: Future<Output = Result<R, E>>,
-    R: super::Response,
+    F: Future<Output = Result<super::Response<D, Ext>, E>>,
 {
-    type Output = Result<R, E>;
+    type Output = Result<super::Response<D, Ext>, E>;
     fn poll(
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
@@ -44,7 +43,8 @@ where
             Poll::Pending => Poll::Pending,
             Poll::Ready(Ok(r)) => {
                 self.store.write().unwrap().store_response_cookies(
-                    r.headers()
+                    r.parts
+                        .headers
                         .get_all(http::header::SET_COOKIE)
                         .iter()
                         .filter_map(|v| match parse_set_cookie(v) {
@@ -106,13 +106,11 @@ impl<S> Cookie<S> {
         Ok(())
     }
 }
-impl<S, B, R> Service<super::MessageReq<B>> for Cookie<S>
+impl<S, B, D, Ext> Service<super::MessageReq<B>> for Cookie<S>
 where
-    S: Service<super::MessageReq<B>>,
-    S::Future: Future<Output = Result<R, S::Error>>,
-    R: super::Response,
+    S: Service<super::MessageReq<B>, Response = super::Response<D, Ext>>,
 {
-    type Response = R;
+    type Response = S::Response;
     type Error = S::Error;
     type Future = CookieFuture<S::Future>;
     fn call(&self, mut req: super::MessageReq<B>) -> Self::Future {

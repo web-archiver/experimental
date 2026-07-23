@@ -1,11 +1,6 @@
 use std::{convert::Infallible, os::fd::BorrowedFd, sync::Arc};
 
-pub trait Response {
-    fn status(&self) -> http::StatusCode;
-    fn headers(&self) -> &http::HeaderMap<http::HeaderValue>;
-    fn body(&self) -> &[u8];
-    fn set_body(&mut self, b: Vec<u8>);
-}
+use webar_core::service::Service;
 
 #[derive(Debug, Clone)]
 pub struct ReqBody(Option<bytes::Bytes>);
@@ -48,6 +43,7 @@ pub mod id;
 pub mod limit;
 pub mod record;
 pub mod retry;
+pub mod save_body;
 pub mod timing;
 
 type DefaultInner<C> = limit::Limit<
@@ -55,12 +51,19 @@ type DefaultInner<C> = limit::Limit<
         retry::RetryService<
             Arc<
                 id::MessageIdService<
-                    cookie::Cookie<
-                        decompress::Decompress<
-                            browser_header::BrowserHeaders<
-                                record::RecordService<
-                                    timing::TimingService<
-                                        hyper_client::Client<C, timing::TimedBody>,
+                    save_body::SaveBody<
+                        save_body::InferDecompressed,
+                        cookie::Cookie<
+                            decompress::Decompress<
+                                browser_header::BrowserHeaders<
+                                    record::RecordService<
+                                        save_body::SaveBody<
+                                            save_body::InferEncoded,
+                                            timing::TimingService<
+                                                save_body::SavedData<Vec<u8>>,
+                                                hyper_client::Client<C, timing::TimedBody>,
+                                            >,
+                                        >,
                                     >,
                                 >,
                             >,
@@ -86,8 +89,15 @@ pub(crate) struct MessageReq<D> {
     data: D,
 }
 
+pub struct Response<D, E> {
+    pub(crate) parts: http::response::Parts,
+    pub(crate) data: D,
+    pub(crate) trailers: Option<http::HeaderMap>,
+    pub(crate) extra: E,
+}
+
 pub(crate) type DefaultReq = Request<ReqBody>;
-pub(crate) type DefaultResponse = record::RecordResponse<timing::TimingResponse>;
+pub(crate) type DefaultResponse = Response<save_body::SavedData<Vec<u8>>, record::RecordExtra>;
 
 #[derive(Clone)]
 pub(crate) struct DefaultService<C>(DefaultInner<C>);
@@ -106,10 +116,18 @@ impl<C> DefaultService<C> {
         let inner =
             webar_core::service::builder::ServiceBuilder::new(hyper_client::Client::new(connector))
                 .once_layer(timing::TimingLayer::new())
-                .once_layer(record::RecordLayer::new(root, blob_store)?)
+                .once_layer(save_body::SaveBodyLayer::new(
+                    save_body::InferEncoded,
+                    Arc::clone(&blob_store),
+                ))
+                .once_layer(record::RecordLayer::new(root, Arc::clone(&blob_store))?)
                 .once_layer(browser_header::BrowserHeadersLayer::new())
                 .once_layer(decompress::DecompressLayer::new())
                 .once_layer(cookie::CookieLayer::new(cookies))
+                .once_layer(save_body::SaveBodyLayer::new(
+                    save_body::InferDecompressed,
+                    blob_store,
+                ))
                 .once_layer(id::MessageIdLayer::new(id_generator.clone()))
                 .arc()
                 .once_layer(retry::RetryLayer::new())
@@ -119,7 +137,7 @@ impl<C> DefaultService<C> {
         Ok(Self(inner))
     }
 }
-impl<C> webar_core::service::Service<DefaultReq> for DefaultService<C>
+impl<C> Service<DefaultReq> for DefaultService<C>
 where
     C: hyper_util::client::legacy::connect::Connect + Clone + Send + Sync + 'static,
 {
