@@ -14,6 +14,7 @@ use webar_core::{
 use webar_http_lib_core::utils::create_file;
 
 pub mod blob;
+pub mod data_tar;
 pub mod http_client;
 pub mod local_id;
 pub mod log;
@@ -49,6 +50,7 @@ pub struct Context<'a> {
     pub blob_store: &'a Arc<blob::BlobStore>,
     pub object_store: &'a mut object_store::MakeStore,
     pub http_cloent: &'a mut http_client::Client,
+    pub data_tar: &'a mut data_tar::DataTar,
 }
 
 #[derive(Debug)]
@@ -142,12 +144,14 @@ fn run(
             })
         })
         .context("invalid utf8 character in uname")?;
+    let mut data_tar = data_tar::DataTar::new(root).context("failed to crate data tar")?;
 
     main(Context {
         runtime: rt.handle(),
         blob_store: &blob_store,
         object_store: &mut object_store,
         http_cloent: &mut http_client,
+        data_tar: &mut data_tar,
     })
     .context("fetcher function returns error")?;
 
@@ -168,6 +172,9 @@ fn run(
         }),
     )
     .context("failed to write fetch info")?;
+    data_tar
+        .finish()
+        .context("failed to finish writing data tar")?;
 
     Ok(())
 }

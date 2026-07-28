@@ -67,3 +67,4 @@ webar-direct-connector = { version = "0.1.0", path = "../direct-connector", defa
   "client",
 ] }
 httpdate = "1.0.3"
+tar.workspace = true
