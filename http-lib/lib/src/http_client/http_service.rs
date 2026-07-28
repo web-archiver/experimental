@@ -11,6 +11,9 @@ impl ReqBody {
     pub const fn from_static(v: &'static [u8]) -> Self {
         Self(Some(bytes::Bytes::from_static(v)))
     }
+    pub fn from_vec(v: Vec<u8>) -> Self {
+        Self(Some(bytes::Bytes::from(v)))
+    }
 }
 impl http_body::Body for ReqBody {
     type Data = bytes::Bytes;

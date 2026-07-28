@@ -10,12 +10,6 @@ use webar_http_lib_core::utils::{create_dir, create_file, open_new_dir, write_fi
 
 pub type Error = anyhow::Error;
 
-#[derive(ToGCbor)]
-struct Object<T, O> {
-    ty: T,
-    data: O,
-}
-
 pub struct ObjectStore<S, I: ?Sized> {
     server: S,
     instance: EncodedVal<I>,
@@ -42,8 +36,8 @@ impl<S: AsRef<str>, I> ObjectStore<S, I> {
             None => Ok(false),
         }
     }
-    pub fn add_object(&mut self, ty: &impl ToGCbor, data: &impl ToGCbor) -> Result<(), Error> {
-        let val = self.val_buf.encode(&Object { ty, data });
+    pub fn add_object(&mut self, data: &impl ToGCbor) -> Result<(), Error> {
+        let val = self.val_buf.encode(data);
         self.data_file.write_all(val.as_bytes()).map_err(Into::into)
     }
 }

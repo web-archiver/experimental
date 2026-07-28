@@ -5,7 +5,7 @@ use std::{
 use anyhow::Result;
 use http::{HeaderName, HeaderValue, StatusCode};
 
-use webar_core::{digest::Digest, service::Service};
+use webar_core::{codec::gcbor::GCborCodec, digest::Digest, service::Service};
 
 use crate::blob::BlobStore;
 pub use http_service::{
@@ -46,6 +46,25 @@ impl Response {
     }
     pub fn body(&self) -> &[u8] {
         &self.0.data.data
+    }
+    pub fn body_digest(&self) -> &Digest {
+        &self.0.data.digest
+    }
+}
+
+#[derive(Debug, GCborCodec)]
+pub struct MessageInfo {
+    request_id: RequestId,
+    message_id: MessageId,
+    body_digest: Digest,
+}
+impl MessageInfo {
+    pub fn new(resp: &Response) -> Self {
+        Self {
+            request_id: resp.0.extra.request_id.clone(),
+            message_id: resp.0.extra.message_id.clone(),
+            body_digest: resp.0.data.digest.clone(),
+        }
     }
 }
 
