@@ -1,0 +1,16 @@
+[package]
+name = "webar-store-backend-fs"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+rustix.workspace = true
+const-hex.workspace = true
+rusqlite = "0.39.0"
+webar-core.workspace = true
+webar-utils-fs.workspace = true
+
+[dev-dependencies]
+hex-literal.workspace = true

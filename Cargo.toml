@@ -8,6 +8,8 @@ members = [
   "http-lib/core",
   "http-lib/target-info",
   "http-lib/direct-connector",
+  "store/backend/fs",
+  "utils/fs",
 ]
 
 
@@ -43,3 +45,4 @@ tar = "0.4.43"
 clap = { version = "4.6.1", features = ["derive", "env"] }
 tokio = "1.43.0"
 webar-core = { path = "./core/rs" }
+webar-utils-fs = { path = "./utils/fs" }
