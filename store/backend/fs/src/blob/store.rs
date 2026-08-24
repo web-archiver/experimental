@@ -85,6 +85,8 @@ impl BlobFile {
     }
 }
 
+pub type Error = rustix::io::Errno;
+
 pub struct Store {
     root: OwnedFd,
 }

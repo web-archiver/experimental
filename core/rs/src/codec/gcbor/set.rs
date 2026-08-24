@@ -64,7 +64,7 @@ impl<V: GCborOrd + valuable::Valuable> valuable::Valuable for GCborSet<V> {
     }
 }
 
-const TAG: u64 = 258;
+pub(crate) const TAG: u64 = 258;
 impl<V: GCborOrd + ToGCbor> ToGCbor for GCborSet<V> {
     fn encode<W: ciborium_io::Write>(
         &self,

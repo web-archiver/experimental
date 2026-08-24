@@ -5,6 +5,8 @@ use webar_core::digest::{Digest, Sha256};
 const SHA256_INSERT_SQL: &str = "insert or ignore into sha256 (sha256) values (?)";
 const SHA256_EXISTS_SQL: &str = "select * from sha256 where sha256 = ?";
 
+pub type Error = rusqlite::Error;
+
 pub struct Index {
     conn: Connection,
 }
