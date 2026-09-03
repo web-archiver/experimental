@@ -1,0 +1,21 @@
+[package]
+name = "webar-archive-blob-filter-bin"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+zip = { version = "8.6.0", default-features = false, features = [
+  "bzip2",
+  "deflate",
+  "lzma",
+  "xz",
+  "zstd",
+] }
+webar-core.workspace = true
+webar-store-backend-fs = { path = "../backend/fs" }
+
+[dev-dependencies]
+hex-literal.workspace = true

@@ -14,12 +14,13 @@ use webar_utils_fs::{create_dir, open_new_dir, set_dir_ro, write_file};
 const SHA256_DIR: &str = "sha256";
 const SHA256_LEN: usize = 64;
 const PATH_LEN: usize = SHA256_DIR.len() + 1 + SHA256_LEN + 1;
-struct PathBuf([u8; PATH_LEN]);
+pub struct PathBuf([u8; PATH_LEN]);
 impl PathBuf {
     pub fn new() -> Self {
         Self([0; PATH_LEN])
     }
-    pub fn digest_path<'a>(&'a mut self, digest: &Digest) -> &'a CStr {
+
+    pub fn digest_path_cstr<'a>(&'a mut self, digest: &Digest) -> &'a CStr {
         self.0[0..SHA256_DIR.len()].copy_from_slice(SHA256_DIR.as_bytes());
         self.0[SHA256_DIR.len()] = b'/';
         const_hex::encode_to_slice(
@@ -30,7 +31,11 @@ impl PathBuf {
         )
         .unwrap();
         self.0[SHA256_DIR.len() + 1 + SHA256_LEN] = 0;
-        unsafe { std::ffi::CStr::from_bytes_with_nul_unchecked(&self.0) }
+
+        unsafe { CStr::from_bytes_with_nul_unchecked(&self.0) }
+    }
+    pub fn digest_path_str<'a>(&'a mut self, digest: &Digest) -> &'a str {
+        unsafe { std::str::from_utf8_unchecked(self.digest_path_cstr(digest).to_bytes()) }
     }
 }
 impl Default for PathBuf {
@@ -105,7 +110,7 @@ impl Store {
 
     pub fn add_blob(&self, digest: &Digest, data: &[u8]) -> Result<bool> {
         let mut path = PathBuf::new();
-        let path = path.digest_path(digest);
+        let path = path.digest_path_cstr(digest);
         match write_file(self.root.as_fd(), path, data) {
             Ok(()) => Ok(true),
             Err(Errno::EXIST) => Ok(false),
@@ -131,7 +136,7 @@ impl Store {
 
     pub fn link_blob(&self, digest: &Digest, other: &Self) -> Result<bool> {
         let mut path = PathBuf::new();
-        let path = path.digest_path(digest);
+        let path = path.digest_path_cstr(digest);
         match fs::linkat(
             other.root.as_fd(),
             path,
@@ -146,7 +151,7 @@ impl Store {
     }
     pub fn link_fd(&self, digest: &Digest, fd: BorrowedFd) -> Result<bool> {
         let mut path = PathBuf::new();
-        let path = path.digest_path(digest);
+        let path = path.digest_path_cstr(digest);
         match fs::linkat(fd, c"", self.root.as_fd(), path, AtFlags::EMPTY_PATH) {
             Ok(()) => Ok(true),
             Err(Errno::EXIST) => Ok(false),
@@ -156,7 +161,7 @@ impl Store {
 
     pub fn open_blob(&self, digest: &Digest) -> Result<OwnedFd> {
         let mut path = PathBuf::new();
-        let path = path.digest_path(digest);
+        let path = path.digest_path_cstr(digest);
         fs::openat(
             self.root.as_fd(),
             path,
@@ -169,7 +174,7 @@ impl Store {
         let mut path = PathBuf::new();
         fs::accessat(
             self.root.as_fd(),
-            path.digest_path(digest),
+            path.digest_path_cstr(digest),
             fs::Access::EXISTS,
             AtFlags::empty(),
         )
@@ -194,7 +199,9 @@ mod test {
 
         fn test_eq(digest: &Digest, expected: &CStr) {
             let mut buf = PathBuf::new();
-            assert_eq!(buf.digest_path(digest), expected);
+            let path = buf.digest_path_cstr(digest);
+            assert_eq!(path, expected);
+            path.to_str().unwrap();
         }
 
         #[test]
@@ -210,10 +217,10 @@ mod test {
         #[test]
         fn sha256_reuse() {
             let mut buf = PathBuf::new();
-            std::hint::black_box(buf.digest_path(&Digest::Sha256(Sha256([1; _]))));
+            std::hint::black_box(buf.digest_path_cstr(&Digest::Sha256(Sha256([1; _]))));
             // sha256 of string "buf_reuse"
             assert_eq!(
-                buf.digest_path(&Digest::Sha256(Sha256(hex_literal::hex!(
+                buf.digest_path_cstr(&Digest::Sha256(Sha256(hex_literal::hex!(
                     "176b05ca04bf12abdeb91dba1590b7d6f64fb65ecb43f4df7fe850931fe70f74"
                 )))),
                 c"sha256/176b05ca04bf12abdeb91dba1590b7d6f64fb65ecb43f4df7fe850931fe70f74"

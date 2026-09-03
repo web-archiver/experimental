@@ -9,6 +9,7 @@ members = [
   "http-lib/target-info",
   "http-lib/direct-connector",
   "store/backend/fs",
+  "store/blob-filter-bin",
   "utils/fs",
 ]
 
