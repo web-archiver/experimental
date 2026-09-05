@@ -63,8 +63,11 @@ impl MessageInfo {
         Self {
             request_id: resp.0.extra.request_id.clone(),
             message_id: resp.0.extra.message_id.clone(),
-            body_digest: resp.0.data.digest.clone(),
+            body_digest: resp.0.data.digest,
         }
+    }
+    pub fn body_digest(&self) -> &Digest {
+        &self.body_digest
     }
 }
 

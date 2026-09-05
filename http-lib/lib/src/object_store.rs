@@ -42,6 +42,17 @@ impl<S: AsRef<str>, I> ObjectStore<S, I> {
     }
 }
 
+pub struct ObjectFile {
+    val_buf: ValueBuf,
+    file: std::fs::File,
+}
+impl ObjectFile {
+    pub fn add_object(&mut self, data: &impl ToGCbor) -> std::io::Result<()> {
+        let val = self.val_buf.encode(data);
+        self.file.write_all(val.as_bytes())
+    }
+}
+
 #[derive(ToGCbor)]
 struct StoreInfo<'a, I, U> {
     server: &'a str,

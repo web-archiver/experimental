@@ -116,6 +116,19 @@ impl DataTar {
 
         Ok(())
     }
+    pub fn add_message_info_seq(
+        &mut self,
+        base_path: &str,
+        ext: &str,
+        data: &[crate::http_client::MessageInfo],
+    ) -> std::io::Result<()> {
+        self.add_blob_data_seq(
+            base_path,
+            ext,
+            data.iter()
+                .map(crate::http_client::MessageInfo::body_digest),
+        )
+    }
 
     pub(crate) fn finish(self) -> std::io::Result<()> {
         self.tar.into_inner()?.into_inner()?;

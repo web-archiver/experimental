@@ -85,6 +85,10 @@ impl Default for FetcherConfig<'_> {
     }
 }
 
+pub fn error_field(e: &anyhow::Error) -> &(dyn std::error::Error + 'static) {
+    e.as_ref()
+}
+
 fn run(
     root: BorrowedFd,
     start_time: Timestamp,

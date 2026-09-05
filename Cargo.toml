@@ -8,6 +8,8 @@ members = [
   "http-lib/core",
   "http-lib/target-info",
   "http-lib/direct-connector",
+  "upstream/notion/core-rs",
+  "upstream/notion/fetcher",
 ]
 
 
