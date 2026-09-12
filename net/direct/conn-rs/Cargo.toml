@@ -1,0 +1,21 @@
+[package]
+name = "webar-net-direct-conn"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+
+[dependencies]
+tokio = { workspace = true, features = ["net", "sync"] }
+webar-core.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "io-util"] }
+rustix = { workspace = true, features = ["thread"] }
+
+[[test]]
+name = "tcp-loopback"
+harness = false
+
+[[test]]
+name = "udp-loopback"
+harness = false
