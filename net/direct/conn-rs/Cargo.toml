@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 tokio = { workspace = true, features = ["net", "sync"] }
+rustix = { workspace = true, features = ["net"] }
 webar-core.workspace = true
 
 [dev-dependencies]

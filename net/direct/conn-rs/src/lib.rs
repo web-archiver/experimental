@@ -11,13 +11,21 @@ impl Drop for ThreadRef {
 }
 
 pub mod tcp {
-    use std::{io::Result, net::SocketAddr, pin::Pin, sync::Arc};
+    use std::{
+        io::Result,
+        net::SocketAddr,
+        os::fd::{FromRawFd, IntoRawFd, OwnedFd},
+        pin::Pin,
+        sync::Arc,
+    };
+
+    use rustix::net::{AddressFamily, SocketFlags, SocketType};
 
     use crate::ThreadRef;
 
     type ConnectMsg = (
-        SocketAddr,
-        tokio::sync::oneshot::Sender<Result<std::net::TcpStream>>,
+        AddressFamily,
+        tokio::sync::oneshot::Sender<rustix::io::Result<OwnedFd>>,
     );
 
     #[derive(Clone)]
@@ -33,8 +41,15 @@ pub mod tcp {
                 std::thread::Builder::new()
                     .name("direct-connector-tcp".into())
                     .spawn(move || {
-                        while let Some((addr, resp)) = recv.blocking_recv() {
-                            let _ = resp.send(std::net::TcpStream::connect(addr));
+                        while let Some((af, resp)) = recv.blocking_recv() {
+                            // connect socket from connector so that we don't need
+                            // to send complete address
+                            let _ = resp.send(rustix::net::socket_with(
+                                af,
+                                SocketType::STREAM,
+                                SocketFlags::NONBLOCK | SocketFlags::CLOEXEC,
+                                Some(rustix::net::ipproto::TCP),
+                            ));
                         }
                     })
                     .unwrap(),
@@ -65,18 +80,34 @@ pub mod tcp {
             let conn = self.clone();
             ConnectFuture(Box::pin(async move {
                 let (send, resp) = tokio::sync::oneshot::channel();
-                conn.sender.send((req, send)).await.unwrap();
-                resp.await.unwrap().and_then(|sock| {
-                    sock.set_nonblocking(true)?;
-                    tokio::net::TcpStream::from_std(sock)
-                })
+                conn.sender
+                    .send((
+                        match req {
+                            SocketAddr::V4(_) => AddressFamily::INET,
+                            SocketAddr::V6(_) => AddressFamily::INET6,
+                        },
+                        send,
+                    ))
+                    .await
+                    .unwrap();
+                unsafe { tokio::net::TcpSocket::from_raw_fd(resp.await.unwrap()?.into_raw_fd()) }
+                    .connect(req)
+                    .await
             }))
         }
     }
 }
 
 pub mod udp {
-    use std::{io::Result, net::SocketAddr, pin::Pin, sync::Arc};
+    use std::{
+        io::Result,
+        net::SocketAddr,
+        os::fd::{AsFd, OwnedFd},
+        pin::Pin,
+        sync::Arc,
+    };
+
+    use rustix::net::{AddressFamily, SocketFlags};
 
     use crate::ThreadRef;
 
@@ -94,8 +125,8 @@ pub mod udp {
         }
     }
     type UdpConnectMsg = (
-        ConnectReq,
-        tokio::sync::oneshot::Sender<Result<std::net::UdpSocket>>,
+        AddressFamily,
+        tokio::sync::oneshot::Sender<rustix::io::Result<OwnedFd>>,
     );
     #[derive(Clone)]
     pub struct Connector {
@@ -109,12 +140,13 @@ pub mod udp {
             let thread = std::thread::Builder::new()
                 .name("direct-connector-udp".into())
                 .spawn(move || {
-                    while let Some((req, resp)) = recv.blocking_recv() {
-                        let _ =
-                            resp.send(std::net::UdpSocket::bind(req.local_addr).and_then(|sock| {
-                                sock.connect(req.peer_addr)?;
-                                Ok(sock)
-                            }));
+                    while let Some((af, resp)) = recv.blocking_recv() {
+                        let _ = resp.send(rustix::net::socket_with(
+                            af,
+                            rustix::net::SocketType::DGRAM,
+                            SocketFlags::CLOEXEC | SocketFlags::NONBLOCK,
+                            Some(rustix::net::ipproto::UDP),
+                        ));
                     }
                 })
                 .unwrap();
@@ -146,11 +178,20 @@ pub mod udp {
             let conn = self.clone();
             ConnectFuture(Box::pin(async move {
                 let (send, recv) = tokio::sync::oneshot::channel();
-                conn.sender.send((req, send)).await.unwrap();
-                recv.await.unwrap().and_then(|sock| {
-                    sock.set_nonblocking(true)?;
-                    tokio::net::UdpSocket::from_std(sock)
-                })
+                conn.sender
+                    .send((
+                        match req.peer_addr {
+                            SocketAddr::V4(_) => rustix::net::AddressFamily::INET,
+                            SocketAddr::V6(_) => rustix::net::AddressFamily::INET6,
+                        },
+                        send,
+                    ))
+                    .await
+                    .unwrap();
+                let sock = recv.await.unwrap()?;
+                rustix::net::bind(sock.as_fd(), &req.local_addr)?;
+                rustix::net::connect(sock.as_fd(), &req.peer_addr)?;
+                tokio::net::UdpSocket::from_std(std::net::UdpSocket::from(sock))
             }))
         }
     }
