@@ -11,6 +11,7 @@ members = [
   "net/core-rs",
   "net/direct/conn-rs",
   "net/packet-capture/conn-rs",
+  "net/stream-log/conn-rs",
 ]
 
 
