@@ -21,6 +21,12 @@ pub trait ConnectReq {
     type Inner;
     fn into_inner(self) -> (TlsConnectReq, Self::Inner);
 }
+impl<T> ConnectReq for (TlsConnectReq, T) {
+    type Inner = T;
+    fn into_inner(self) -> (TlsConnectReq, Self::Inner) {
+        self
+    }
+}
 
 pub trait LogConnected<C>: Clone {
     type Error: std::error::Error + Send + Sync + 'static;
