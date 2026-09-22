@@ -3,8 +3,8 @@ use crate::{
     codec::gcbor::{internal::TypeInfo, ToGCbor},
 };
 
-pub struct CborDer<'a, T>(pub &'a [T]);
-impl<T: AsRef<[u8]>> ToGCbor for CborDer<'_, T> {
+pub struct CborCerts<'a, T>(pub &'a [T]);
+impl<T: AsRef<[u8]>> ToGCbor for CborCerts<'_, T> {
     fn encode<W: ciborium_io::Write>(
         &self,
         encoder: crate::codec::gcbor::internal::encoding::Encoder<W>,

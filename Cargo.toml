@@ -12,6 +12,7 @@ members = [
   "net/direct/conn-rs",
   "net/packet-capture/conn-rs",
   "net/stream-log/conn-rs",
+  "net/tls/rustls-conn",
 ]
 
 
