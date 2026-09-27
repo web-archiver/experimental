@@ -1,11 +1,13 @@
 [package]
-name = "webar-net-stream-log-conn"
+name = "webar-tcp-log-conn"
 version = "0.1.0"
 edition = "2024"
 license.workspace = true
 
 [dependencies]
+libc = "0.2.186"
 tracing.workspace = true
-pin-project.workspace = true
+tokio = { workspace = true, features = ["net"] }
 webar-core.workspace = true
 webar-net-core.workspace = true
+webar-net-stream-log-conn = { path = "../../stream-log/conn-rs" }
