@@ -9,6 +9,15 @@ pub trait Service<Req> {
 
     fn call(&self, req: Req) -> Self::Future;
 }
+pub trait AsyncService<Req> {
+    type Response;
+    type Error;
+    fn call_async(
+        &self,
+        req: Req,
+    ) -> impl Future<Output = Result<Self::Response, Self::Error>> + Send;
+}
+
 impl<S: ?Sized, Req> Service<Req> for Box<S>
 where
     S: Service<Req>,
@@ -19,6 +28,17 @@ where
     #[inline]
     fn call(&self, req: Req) -> Self::Future {
         S::call(self, req)
+    }
+}
+impl<S: ?Sized, Req> AsyncService<Req> for Box<S>
+where
+    S: AsyncService<Req>,
+{
+    type Response = S::Response;
+    type Error = S::Error;
+    #[inline]
+    fn call_async(&self, req: Req) -> impl Future<Output = Result<Self::Response, Self::Error>> {
+        S::call_async(self, req)
     }
 }
 impl<S: ?Sized, Req> Service<Req> for std::rc::Rc<S>
@@ -33,6 +53,17 @@ where
         S::call(self, req)
     }
 }
+impl<S: ?Sized, Req> AsyncService<Req> for std::rc::Rc<S>
+where
+    S: AsyncService<Req>,
+{
+    type Response = S::Response;
+    type Error = S::Error;
+    #[inline]
+    fn call_async(&self, req: Req) -> impl Future<Output = Result<Self::Response, Self::Error>> {
+        S::call_async(self, req)
+    }
+}
 impl<S: ?Sized, Req> Service<Req> for std::sync::Arc<S>
 where
     S: Service<Req>,
@@ -43,6 +74,17 @@ where
     #[inline]
     fn call(&self, req: Req) -> Self::Future {
         S::call(self, req)
+    }
+}
+impl<S: ?Sized, Req> AsyncService<Req> for std::sync::Arc<S>
+where
+    S: AsyncService<Req>,
+{
+    type Response = S::Response;
+    type Error = S::Error;
+    #[inline]
+    fn call_async(&self, req: Req) -> impl Future<Output = Result<Self::Response, Self::Error>> {
+        S::call_async(self, req)
     }
 }
 

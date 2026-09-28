@@ -178,6 +178,11 @@ impl ToGCbor for u64 {
         encoder.0.push(Header::Positive(*self)).map_err(Error)
     }
 }
+impl ToGCbor for usize {
+    fn encode<W: Write>(&self, encoder: Encoder<W>) -> Result<(), Error<W::Error>> {
+        (*self as u64).encode(encoder)
+    }
+}
 impl ToGCbor for i8 {
     fn encode<W: Write>(&self, encoder: Encoder<W>) -> Result<(), Error<W::Error>> {
         (*self as i64).encode(encoder)
@@ -203,6 +208,11 @@ impl ToGCbor for i64 {
                 Header::Positive(*self as u64)
             })
             .map_err(Error)
+    }
+}
+impl ToGCbor for isize {
+    fn encode<W: Write>(&self, encoder: Encoder<W>) -> Result<(), Error<W::Error>> {
+        (*self as i64).encode(encoder)
     }
 }
 impl ToGCbor for () {

@@ -6,7 +6,7 @@ use rustls::pki_types::ServerName;
 use tokio_rustls::client::TlsStream;
 use webar_core::{
     bytes::Bytes,
-    codec::gcbor::{self, support::tls::CborDer, ToGCbor},
+    codec::gcbor::{self, support::tls::CborCerts, ToGCbor},
     service::{OnceLayer, Service},
 };
 use webar_http_lib_core::utils::write_file;
@@ -63,7 +63,7 @@ pub enum Error<E> {
 #[derive(ToGCbor)]
 struct Info<'a> {
     protocol_version: u16,
-    der: CborDer<'a, rustls::pki_types::CertificateDer<'a>>,
+    der: CborCerts<'a, rustls::pki_types::CertificateDer<'a>>,
     #[gcbor(omissible)]
     alpn: Option<&'a Bytes>,
     negotiated_cipher_suite: u16,
@@ -126,7 +126,7 @@ where
                         c"tls_info.bin",
                         &gcbor::to_vec(&Info {
                             protocol_version: tls_conn.protocol_version().unwrap().into(),
-                            der: CborDer(tls_conn.peer_certificates().unwrap()),
+                            der: CborCerts(tls_conn.peer_certificates().unwrap()),
                             alpn: tls_conn.alpn_protocol().map(Bytes::new),
                             negotiated_cipher_suite: tls_conn
                                 .negotiated_cipher_suite()
