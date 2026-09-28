@@ -5,7 +5,7 @@ use std::{
 };
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use webar_core::service::Service;
+use webar_core::service::AsyncService;
 
 /// map current user and group to root, otherwise capabilities will be dropped on child process
 fn map_user_groups(parent_uid: rustix::process::Uid, parent_gid: rustix::process::Gid) {
@@ -78,7 +78,7 @@ fn main() {
             );
             let mut sock = rt
                 .block_on(
-                    client.call(webar_net_pktcap_conn::client::TcpConnectReq::new(
+                    client.call_async(webar_net_pktcap_conn::client::TcpConnectReq::new(
                         (
                             // slirp4netns host addr
                             std::net::Ipv4Addr::from_octets([10, 0, 2, 2]),

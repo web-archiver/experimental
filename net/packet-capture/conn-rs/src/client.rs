@@ -2,8 +2,6 @@ use std::{
     mem::MaybeUninit,
     net::SocketAddr,
     os::fd::{AsFd, FromRawFd, IntoRawFd, OwnedFd},
-    sync::Arc,
-    task::Poll,
 };
 
 use rustix::net::{AddressFamily, Protocol, SocketType};
@@ -77,51 +75,38 @@ impl TcpConnectReq {
         Self(peer_addr)
     }
 }
-#[pin_project::pin_project]
-pub struct TcpConnectFuture(
-    #[pin]
-    std::pin::Pin<Box<dyn Future<Output = std::io::Result<tokio::net::TcpStream>> + Send + Sync>>,
-);
-impl Future for TcpConnectFuture {
-    type Output = std::io::Result<tokio::net::TcpStream>;
-    #[inline]
-    fn poll(
-        self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Self::Output> {
-        self.project().0.poll(cx)
+impl From<SocketAddr> for TcpConnectReq {
+    fn from(value: SocketAddr) -> Self {
+        Self(value)
     }
 }
-#[derive(Clone)]
-pub struct Connector(Arc<tokio::sync::Mutex<Client>>);
+
+pub struct Connector(tokio::sync::Mutex<Client>);
 impl Connector {
     pub fn new(client: Client) -> Self {
-        Self(Arc::new(tokio::sync::Mutex::new(client)))
+        Self(tokio::sync::Mutex::new(client))
     }
 }
-impl webar_core::service::Service<TcpConnectReq> for Connector {
+impl webar_core::service::AsyncService<TcpConnectReq> for Connector {
     type Response = tokio::net::TcpStream;
     type Error = std::io::Error;
-    type Future = TcpConnectFuture;
-    fn call(&self, req: TcpConnectReq) -> Self::Future {
-        let client = Arc::clone(&self.0);
-        TcpConnectFuture(Box::pin(async move {
-            let sock = client
-                .lock()
-                .await
-                .send_req(
-                    match req.0 {
-                        SocketAddr::V4(_) => AddressFamily::INET,
-                        SocketAddr::V6(_) => AddressFamily::INET6,
-                    },
-                    SocketType::STREAM,
-                    Some(rustix::net::ipproto::TCP),
-                )
-                .await?;
-            unsafe { tokio::net::TcpSocket::from_raw_fd(sock.into_raw_fd()) }
-                .connect(req.0)
-                .await
-        }))
+    async fn call_async(&self, req: TcpConnectReq) -> std::io::Result<tokio::net::TcpStream> {
+        let sock = self
+            .0
+            .lock()
+            .await
+            .send_req(
+                match req.0 {
+                    SocketAddr::V4(_) => AddressFamily::INET,
+                    SocketAddr::V6(_) => AddressFamily::INET6,
+                },
+                SocketType::STREAM,
+                Some(rustix::net::ipproto::TCP),
+            )
+            .await?;
+        unsafe { tokio::net::TcpSocket::from_raw_fd(sock.into_raw_fd()) }
+            .connect(req.0)
+            .await
     }
 }
 
@@ -138,41 +123,25 @@ impl UdpConnectReq {
         }
     }
 }
-#[pin_project::pin_project]
-pub struct UdpConnectFuture(
-    #[pin]
-    std::pin::Pin<Box<dyn Future<Output = std::io::Result<tokio::net::UdpSocket>> + Send + Sync>>,
-);
-impl Future for UdpConnectFuture {
-    type Output = std::io::Result<tokio::net::UdpSocket>;
-    #[inline]
-    fn poll(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> Poll<Self::Output> {
-        self.project().0.poll(cx)
-    }
-}
-
-impl webar_core::service::Service<UdpConnectReq> for Connector {
+impl webar_core::service::AsyncService<UdpConnectReq> for Connector {
     type Response = tokio::net::UdpSocket;
     type Error = std::io::Error;
-    type Future = UdpConnectFuture;
-    fn call(&self, req: UdpConnectReq) -> Self::Future {
-        let client = Arc::clone(&self.0);
-        UdpConnectFuture(Box::pin(async move {
-            let sock = client
-                .lock()
-                .await
-                .send_req(
-                    match req.peer_addr {
-                        SocketAddr::V4(_) => AddressFamily::INET,
-                        SocketAddr::V6(_) => AddressFamily::INET6,
-                    },
-                    SocketType::DGRAM,
-                    Some(rustix::net::ipproto::UDP),
-                )
-                .await?;
-            rustix::net::bind(sock.as_fd(), &req.local_addr)?;
-            rustix::net::connect(sock.as_fd(), &req.peer_addr)?;
-            tokio::net::UdpSocket::from_std(std::net::UdpSocket::from(sock))
-        }))
+    async fn call_async(&self, req: UdpConnectReq) -> std::io::Result<tokio::net::UdpSocket> {
+        let sock = self
+            .0
+            .lock()
+            .await
+            .send_req(
+                match req.peer_addr {
+                    SocketAddr::V4(_) => AddressFamily::INET,
+                    SocketAddr::V6(_) => AddressFamily::INET6,
+                },
+                SocketType::DGRAM,
+                Some(rustix::net::ipproto::UDP),
+            )
+            .await?;
+        rustix::net::bind(sock.as_fd(), &req.local_addr)?;
+        rustix::net::connect(sock.as_fd(), &req.peer_addr)?;
+        tokio::net::UdpSocket::from_std(std::net::UdpSocket::from(sock))
     }
 }

@@ -1,6 +1,6 @@
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 
-use webar_core::service::Service;
+use webar_core::service::AsyncService;
 use webar_net_direct_conn::udp::ConnectReq;
 
 fn main() {
@@ -35,7 +35,7 @@ fn main() {
         let rt = tokio::runtime::LocalRuntime::new().unwrap();
         rt.block_on(async move {
             let conn = conn
-                .call(ConnectReq::new(UNSPEC_ADDR, server_addr))
+                .call_async(ConnectReq::new(UNSPEC_ADDR, server_addr))
                 .await
                 .unwrap();
             conn.send(C2S_MSG.as_bytes()).await.unwrap();

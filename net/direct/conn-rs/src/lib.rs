@@ -15,7 +15,6 @@ pub mod tcp {
         io::Result,
         net::SocketAddr,
         os::fd::{FromRawFd, IntoRawFd, OwnedFd},
-        pin::Pin,
         sync::Arc,
     };
 
@@ -27,6 +26,15 @@ pub mod tcp {
         AddressFamily,
         tokio::sync::oneshot::Sender<rustix::io::Result<OwnedFd>>,
     );
+
+    pub struct ConnectReq {
+        peer_addr: SocketAddr,
+    }
+    impl From<SocketAddr> for ConnectReq {
+        fn from(value: SocketAddr) -> Self {
+            Self { peer_addr: value }
+        }
+    }
 
     #[derive(Clone)]
     pub struct Connector {
@@ -57,43 +65,24 @@ pub mod tcp {
             Self { sender, _thread }
         }
     }
-    pub struct ConnectFuture(
-        Pin<Box<dyn std::future::Future<Output = Result<tokio::net::TcpStream>> + Send + Sync>>,
-    );
-    impl std::future::Future for ConnectFuture {
-        type Output = Result<tokio::net::TcpStream>;
-        #[inline]
-        fn poll(
-            mut self: std::pin::Pin<&mut Self>,
-            cx: &mut std::task::Context<'_>,
-        ) -> std::task::Poll<Self::Output> {
-            self.0.as_mut().poll(cx)
-        }
-    }
-    impl webar_core::service::Service<SocketAddr> for Connector {
+    impl webar_core::service::AsyncService<ConnectReq> for Connector {
         type Response = tokio::net::TcpStream;
         type Error = std::io::Error;
-        type Future = ConnectFuture;
-        fn call(&self, req: SocketAddr) -> Self::Future {
-            // clone sender to prevent queue close during request, and clone thread
-            // handle to prevent thread leak if cloned sender is the last sender
-            let conn = self.clone();
-            ConnectFuture(Box::pin(async move {
-                let (send, resp) = tokio::sync::oneshot::channel();
-                conn.sender
-                    .send((
-                        match req {
-                            SocketAddr::V4(_) => AddressFamily::INET,
-                            SocketAddr::V6(_) => AddressFamily::INET6,
-                        },
-                        send,
-                    ))
-                    .await
-                    .unwrap();
-                unsafe { tokio::net::TcpSocket::from_raw_fd(resp.await.unwrap()?.into_raw_fd()) }
-                    .connect(req)
-                    .await
-            }))
+        async fn call_async(&self, req: ConnectReq) -> Result<tokio::net::TcpStream> {
+            let (send, resp) = tokio::sync::oneshot::channel();
+            self.sender
+                .send((
+                    match req.peer_addr {
+                        SocketAddr::V4(_) => AddressFamily::INET,
+                        SocketAddr::V6(_) => AddressFamily::INET6,
+                    },
+                    send,
+                ))
+                .await
+                .unwrap();
+            unsafe { tokio::net::TcpSocket::from_raw_fd(resp.await.unwrap()?.into_raw_fd()) }
+                .connect(req.peer_addr)
+                .await
         }
     }
 }
@@ -103,7 +92,6 @@ pub mod udp {
         io::Result,
         net::SocketAddr,
         os::fd::{AsFd, OwnedFd},
-        pin::Pin,
         sync::Arc,
     };
 
@@ -156,43 +144,25 @@ pub mod udp {
             }
         }
     }
-    pub struct ConnectFuture(
-        Pin<Box<dyn std::future::Future<Output = Result<tokio::net::UdpSocket>> + Send + Sync>>,
-    );
-    impl std::future::Future for ConnectFuture {
-        type Output = Result<tokio::net::UdpSocket>;
-        #[inline]
-        fn poll(
-            mut self: Pin<&mut Self>,
-            cx: &mut std::task::Context<'_>,
-        ) -> std::task::Poll<Self::Output> {
-            self.0.as_mut().poll(cx)
-        }
-    }
-    impl webar_core::service::Service<ConnectReq> for Connector {
+    impl webar_core::service::AsyncService<ConnectReq> for Connector {
         type Response = tokio::net::UdpSocket;
         type Error = std::io::Error;
-        type Future = ConnectFuture;
-        fn call(&self, req: ConnectReq) -> Self::Future {
-            // see comment for [TcpConnector]
-            let conn = self.clone();
-            ConnectFuture(Box::pin(async move {
-                let (send, recv) = tokio::sync::oneshot::channel();
-                conn.sender
-                    .send((
-                        match req.peer_addr {
-                            SocketAddr::V4(_) => rustix::net::AddressFamily::INET,
-                            SocketAddr::V6(_) => rustix::net::AddressFamily::INET6,
-                        },
-                        send,
-                    ))
-                    .await
-                    .unwrap();
-                let sock = recv.await.unwrap()?;
-                rustix::net::bind(sock.as_fd(), &req.local_addr)?;
-                rustix::net::connect(sock.as_fd(), &req.peer_addr)?;
-                tokio::net::UdpSocket::from_std(std::net::UdpSocket::from(sock))
-            }))
+        async fn call_async(&self, req: ConnectReq) -> Result<Self::Response> {
+            let (send, recv) = tokio::sync::oneshot::channel();
+            self.sender
+                .send((
+                    match req.peer_addr {
+                        SocketAddr::V4(_) => rustix::net::AddressFamily::INET,
+                        SocketAddr::V6(_) => rustix::net::AddressFamily::INET6,
+                    },
+                    send,
+                ))
+                .await
+                .unwrap();
+            let sock = recv.await.unwrap()?;
+            rustix::net::bind(sock.as_fd(), &req.local_addr)?;
+            rustix::net::connect(sock.as_fd(), &req.peer_addr)?;
+            tokio::net::UdpSocket::from_std(std::net::UdpSocket::from(sock))
         }
     }
 }
@@ -232,6 +202,18 @@ pub mod unix {
                     tokio::net::UnixStream::from_std(sock)
                 }),
             ))
+        }
+    }
+    impl<A: AsRef<SocketAddr>> webar_core::service::AsyncService<A> for StreamConnector {
+        type Response = tokio::net::UnixStream;
+        type Error = std::io::Error;
+        #[inline]
+        fn call_async(
+            &self,
+            req: A,
+        ) -> impl Future<Output = std::prelude::v1::Result<Self::Response, Self::Error>> + Send
+        {
+            webar_core::service::Service::<A>::call(self, req)
         }
     }
 }

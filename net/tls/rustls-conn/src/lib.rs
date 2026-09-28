@@ -1,7 +1,7 @@
-use std::{marker::PhantomData, pin::Pin, sync::Arc};
+use std::sync::Arc;
 
 use tokio_rustls::client::TlsStream;
-use webar_core::service::{OnceLayer, Service};
+use webar_core::service::{AsyncService, OnceLayer};
 use webar_net_core::io::tokio_io::{AsyncRead, AsyncWrite};
 
 mod keylog_file;
@@ -28,7 +28,7 @@ impl<T> ConnectReq for (TlsConnectReq, T) {
     }
 }
 
-pub trait LogConnected<C>: Clone {
+pub trait LogConnected<C> {
     type Error: std::error::Error + Send + Sync + 'static;
     fn on_connected(
         &self,
@@ -55,26 +55,6 @@ impl<CE, LE> From<InnerError<CE, LE>> for Error<CE, LE> {
     }
 }
 
-type DynFuture<O> = Pin<Box<dyn std::future::Future<Output = O> + Send>>;
-
-#[pin_project::pin_project]
-pub struct ConnectFuture<F, C, CE, L: LogConnected<C>> {
-    #[allow(clippy::type_complexity)]
-    #[pin]
-    fut: DynFuture<Result<TlsStream<C>, Error<CE, L::Error>>>,
-    _phantom: PhantomData<(F, C, L)>,
-}
-impl<F, C, CE, L: LogConnected<C>> std::future::Future for ConnectFuture<F, C, CE, L> {
-    type Output = Result<TlsStream<C>, Error<CE, L::Error>>;
-    #[inline]
-    fn poll(
-        self: Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Self::Output> {
-        self.project().fut.poll(cx)
-    }
-}
-
 pub fn global_init() {
     rustls::crypto::aws_lc_rs::default_provider()
         .install_default()
@@ -86,44 +66,37 @@ pub struct TlsConnector<S, L> {
     tls_connector: tokio_rustls::client::TlsConnector,
     logger: L,
 }
-impl<S, L, R> Service<R> for TlsConnector<S, L>
+impl<S, L, R> AsyncService<R> for TlsConnector<S, L>
 where
-    R: ConnectReq,
-    S: Service<R::Inner>,
-    S::Future: Send + 'static,
+    R: ConnectReq + Send,
+    S: AsyncService<R::Inner> + Sync,
     S::Response: AsyncRead + AsyncWrite + Unpin + Send,
-    L: LogConnected<S::Response> + Send + 'static,
+    L: LogConnected<S::Response> + Sync,
 {
     type Response = TlsStream<S::Response>;
     type Error = Error<S::Error, L::Error>;
-    type Future = ConnectFuture<S::Future, S::Response, S::Error, L>;
-    fn call(&self, req: R) -> Self::Future {
+    async fn call_async(
+        &self,
+        req: R,
+    ) -> Result<TlsStream<S::Response>, Error<S::Error, L::Error>> {
         let (tls_req, inner_req) = req.into_inner();
-        let lower_fut = self.lower.call(inner_req);
-        let tls_conn = self.tls_connector.clone();
-        let logger = self.logger.clone();
-        ConnectFuture {
-            // box entire future because:
-            // - tls connect future is large
-            // - simplify implementation when lower connect completes. If we
-            //  implement future trait manually, we would manually poll tls future
-            //  immediately after calling TlsConnector::connect
-            fut: Box::pin(async move {
-                let lower_conn = lower_fut.await.map_err(InnerError::LowerConn)?;
-                let tls_conn = tls_conn
-                    .connect(tls_req.server_name, lower_conn)
-                    .await
-                    .map_err(InnerError::TlsError)?;
-                {
-                    let (lower, tls) = tls_conn.get_ref();
-                    logger
-                        .on_connected(lower, tls)
-                        .map_err(InnerError::Logger)?;
-                }
-                Ok(tls_conn)
-            }),
-            _phantom: PhantomData,
+        let lower_conn = self
+            .lower
+            .call_async(inner_req)
+            .await
+            .map_err(InnerError::LowerConn)?;
+        let tls_conn = self
+            .tls_connector
+            .connect(tls_req.server_name, lower_conn)
+            .await
+            .map_err(InnerError::TlsError)?;
+        {
+            let (lower, tls) = tls_conn.get_ref();
+            self.logger
+                .on_connected(lower, tls)
+                .map_err(InnerError::Logger)?;
         }
+        Ok(tls_conn)
     }
 }
 
