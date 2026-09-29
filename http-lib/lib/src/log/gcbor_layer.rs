@@ -1,4 +1,4 @@
-use std::{fs::File, io::Write, ops::DerefMut, os::fd::BorrowedFd, sync::Mutex};
+use std::{ffi::CStr, fs::File, io::Write, ops::DerefMut, os::fd::BorrowedFd, sync::Mutex};
 
 use anyhow::Context as AnyHowCtx;
 use tracing::{field::Visit, Subscriber};
@@ -15,7 +15,7 @@ use webar_core::{
     time::Timestamp,
 };
 
-use webar_http_lib_core::{fetch::TRACING_LOG_GCBOR, utils::create_file};
+use webar_http_lib_core::utils::create_file;
 
 use super::gcbor_field;
 
@@ -288,10 +288,10 @@ struct Entry<'a> {
 
 pub struct GCborLayer(Mutex<(ValueBuf, File)>);
 impl GCborLayer {
-    pub fn new(root: BorrowedFd) -> anyhow::Result<Self> {
+    pub fn new(root: BorrowedFd, path: &CStr) -> anyhow::Result<Self> {
         Ok(Self(Mutex::new((
             ValueBuf::new(),
-            create_file(root, TRACING_LOG_GCBOR.c_path)
+            create_file(root, path)
                 .context("failed to create tracing log file")?
                 .into(),
         ))))

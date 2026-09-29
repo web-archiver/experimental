@@ -25,7 +25,6 @@ const SOCKET_STATUS_TIMEOUT: Duration = Duration::from_secs(8);
 const SOCKET_STATUS_MAX_ERR: u32 = 2;
 
 pub struct Connection {
-    pub(crate) span: tracing::Span,
     pub(crate) conn: OwnedFd,
 }
 async fn serve_connection(sock: OwnedFd) -> std::io::Result<()> {
@@ -314,6 +313,7 @@ pub struct ServerHandle {
 }
 
 pub fn start_server(
+    span: tracing::Span,
     files: OutputFiles,
     conn: impl IntoIterator<Item = Connection> + Send + 'static,
 ) -> Result<ServerHandle, Error> {
@@ -326,6 +326,7 @@ pub fn start_server(
                 rustix::thread::unshare_unsafe(rustix::thread::UnshareFlags::NEWNET)
                     .context(CreateNamespaceSnafu)?;
             }
+            let _span = span.enter();
 
             let runtime = tokio::runtime::LocalRuntime::new().context_msg("create runtime")?;
             let nsfd = rustix::fs::open(
@@ -342,10 +343,10 @@ pub fn start_server(
 
             let _entered = runtime.enter();
             let mut set = tokio::task::JoinSet::new();
-            for c in conn {
+            for (idx, conn) in conn.into_iter().enumerate() {
                 set.spawn(ServerFuture {
-                    span: c.span,
-                    future: serve_connection(c.conn),
+                    span: tracing::info_span!("connection", index = idx),
+                    future: serve_connection(conn.conn),
                 });
             }
             runtime.block_on(set.join_all());

@@ -1,8 +1,8 @@
-use std::{convert::Infallible, future::Future, os::fd::BorrowedFd, task::Poll};
+use std::{os::fd::BorrowedFd, task::Poll};
 
-use tokio_rustls::client::TlsStream;
-
-use webar_core::service::{OnceLayer, Service};
+use webar_core::service::{AsyncService, OnceLayer};
+use webar_http_lib_core::utils::create_file;
+use webar_net_tls_rustls_conn::TlsStream;
 
 use super::conn_meta::ConnectionMeta;
 
@@ -73,26 +73,22 @@ impl<C: ConnectionMeta> ConnectionMeta for MaybeHttpsStream<C> {
     fn local_id(&self) -> crate::local_id::LocalId {
         match self {
             Self::Http(c) => c.local_id(),
-            Self::Https(c) => c.local_id(),
+            Self::Https(c) => c.get_ref().0.local_id(),
         }
     }
     fn data_root(&self) -> std::os::fd::BorrowedFd<'_> {
         match self {
             Self::Http(c) => c.data_root(),
-            Self::Https(c) => c.data_root(),
+            Self::Https(c) => c.get_ref().0.data_root(),
         }
     }
-}
-impl<T: hyper_util::client::legacy::connect::Connection>
-    hyper_util::client::legacy::connect::Connection for MaybeHttpsStream<T>
-{
-    fn connected(&self) -> hyper_util::client::legacy::connect::Connected {
+    fn hyper_connected(&self) -> hyper_util::client::legacy::connect::Connected {
         match self {
-            Self::Http(c) => c.connected(),
+            Self::Http(c) => c.hyper_connected(),
             Self::Https(c) => {
-                let (inner_conn, client_conn) = c.get_ref();
-                let ret = inner_conn.connected();
-                if client_conn.alpn_protocol() == Some(b"h2") {
+                let (lower, client) = c.get_ref();
+                let ret = lower.hyper_connected();
+                if client.alpn_protocol() == Some(b"h2") {
                     ret.negotiated_h2()
                 } else {
                     ret
@@ -102,111 +98,95 @@ impl<T: hyper_util::client::legacy::connect::Connection>
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct CaptureRef<'a>(pub &'a super::capture::CaptureConfig);
-impl<'a, T> super::capture::Config<MaybeHttpsStream<T>> for CaptureRef<'a> {
-    fn capture_config(&self, conn: &MaybeHttpsStream<T>) -> Option<&super::capture::CaptureConfig> {
-        match conn {
-            MaybeHttpsStream::Http(_) => None,
-            MaybeHttpsStream::Https(_) => Some(self.0),
-        }
+#[derive(Clone)]
+pub struct TlsInfoLog;
+impl<C: ConnectionMeta> webar_net_tls_rustls_conn::LogConnected<C> for TlsInfoLog {
+    type Error = std::io::Error;
+    fn on_connected(
+        &self,
+        lower_conn: &C,
+        tls_connection: &rustls::client::ClientConnection,
+    ) -> Result<(), Self::Error> {
+        webar_net_tls_rustls_conn::log_info::write_info_file(
+            &mut create_file(lower_conn.data_root(), c"tls_info.bin")?.into(),
+            tls_connection,
+        )
     }
 }
 
+type TlsError<CE> = webar_net_tls_rustls_conn::Error<CE, std::io::Error>;
+
 #[derive(Debug, thiserror::Error)]
-pub enum Error<Http, Https> {
+pub enum Error<Http> {
     #[error("failed to connect http: {0}")]
-    Http(#[source] Http),
+    Http(#[source] Box<Http>),
+    // tls error is already boxed
     #[error("failed to connect https: {0}")]
-    Https(#[source] Https),
-    #[error("unsupported uri scheme")]
-    MissingScheme,
-    #[error("unsupported uri scheme")]
-    UnsupportedSheme,
+    Https(#[source] TlsError<Http>),
+    #[error("invalid dns name: {0}")]
+    InvalidDnsName(#[source] rustls::pki_types::InvalidDnsNameError),
     #[error("https is required")]
     HttpsRequired,
 }
 
-#[pin_project::pin_project(project=FutProj)]
-enum InnerFuture<HttpFut, HttpsFut> {
-    Http(#[pin] HttpFut),
-    Https(#[pin] HttpsFut),
-    UriError(Option<Error<Infallible, Infallible>>),
-}
-
-#[pin_project::pin_project]
-pub struct HttpsFuture<Http, Https>(#[pin] InnerFuture<Http, Https>);
-impl<T, HttpFut, HttpErr, HttpsFut, HttpsErr> std::future::Future for HttpsFuture<HttpFut, HttpsFut>
-where
-    HttpFut: Future<Output = Result<T, HttpErr>>,
-    HttpsFut: Future<Output = Result<TlsStream<T>, HttpsErr>>,
-{
-    type Output = Result<MaybeHttpsStream<T>, Error<HttpErr, HttpsErr>>;
-    fn poll(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> Poll<Self::Output> {
-        match self.project().0.project() {
-            FutProj::Http(fut) => match fut.poll(cx) {
-                Poll::Pending => Poll::Pending,
-                Poll::Ready(Ok(c)) => Poll::Ready(Ok(MaybeHttpsStream::Http(c))),
-                Poll::Ready(Err(e)) => Poll::Ready(Err(Error::Http(e))),
-            },
-            FutProj::Https(fut) => match fut.poll(cx) {
-                Poll::Pending => Poll::Pending,
-                Poll::Ready(Ok(c)) => Poll::Ready(Ok(MaybeHttpsStream::Https(Box::new(c)))),
-                Poll::Ready(Err(e)) => Poll::Ready(Err(Error::Https(e))),
-            },
-            FutProj::UriError(e) => Poll::Ready(Err(match e.take().unwrap() {
-                Error::MissingScheme => Error::MissingScheme,
-                Error::UnsupportedSheme => Error::UnsupportedSheme,
-                Error::HttpsRequired => Error::HttpsRequired,
-            })),
-        }
-    }
-}
-
-macro_rules! tls_ty {
-    ($inner:ty, $assoc:ident) => {
-        <super::tls::TlsConnector<$inner> as Service<http::Uri>>::$assoc
-    };
-}
-
-#[derive(Clone)]
 pub struct MaybeHttpsConnector<T> {
     https_only: bool,
-    inner: super::tls::TlsConnector<T>,
+    inner: webar_net_tls_rustls_conn::TlsConnector<T, TlsInfoLog>,
 }
-impl<S> Service<http::Uri> for MaybeHttpsConnector<S>
+impl<S, C, E> AsyncService<&super::ConnectReq<'_>> for MaybeHttpsConnector<S>
 where
-    S: Service<http::Uri>,
-    S::Response: tokio::io::AsyncRead + tokio::io::AsyncWrite + ConnectionMeta + Unpin,
+    S: for<'l, 'r> AsyncService<&'r super::ConnectReq<'l>, Response = C, Error = E> + Sync,
+    C: tokio::io::AsyncRead + tokio::io::AsyncWrite + ConnectionMeta + Unpin + Send,
 {
-    type Response = MaybeHttpsStream<S::Response>;
-    type Error = Error<S::Error, tls_ty!(S, Error)>;
-    type Future = HttpsFuture<S::Future, tls_ty!(S, Future)>;
-    fn call(&self, req: http::Uri) -> Self::Future {
-        match req.scheme_str() {
-            Some("http") => {
-                if self.https_only {
-                    HttpsFuture(InnerFuture::UriError(Some(Error::HttpsRequired)))
-                } else {
-                    HttpsFuture(InnerFuture::Http(self.inner.inner().call(req)))
+    type Response = MaybeHttpsStream<C>;
+    type Error = Error<E>;
+    async fn call_async(&self, req: &super::ConnectReq<'_>) -> Result<Self::Response, Self::Error> {
+        if req.in_tls {
+            let serv_name = match req.host {
+                super::Host::Domain(d) => rustls::pki_types::ServerName::DnsName(
+                    rustls::pki_types::DnsName::try_from_str(d)
+                        .map_err(Error::InvalidDnsName)?
+                        .to_owned(),
+                ),
+                super::Host::Ip(ip) => rustls::pki_types::ServerName::IpAddress(ip.into()),
+            };
+            match self
+                .inner
+                .call_async((
+                    webar_net_tls_rustls_conn::TlsConnectReq::new(serv_name),
+                    req,
+                ))
+                .await
+            {
+                Ok(conn) => Ok(MaybeHttpsStream::Https(Box::new(conn))),
+                Err(e) => Err(Error::Https(e)),
+            }
+        } else {
+            if self.https_only {
+                Err(Error::HttpsRequired)
+            } else {
+                match self.inner.get_ref().call_async(req).await {
+                    Ok(conn) => Ok(MaybeHttpsStream::Http(conn)),
+                    Err(e) => Err(Error::Http(Box::new(e))),
                 }
             }
-            Some("https") => HttpsFuture(InnerFuture::Https(self.inner.call(req))),
-            Some(_) => HttpsFuture(InnerFuture::UriError(Some(Error::UnsupportedSheme))),
-            None => HttpsFuture(InnerFuture::UriError(Some(Error::MissingScheme))),
         }
     }
 }
 
 pub struct MaybeHttpsLayer {
     https_only: bool,
-    tls_layer: super::tls::TlsLayer,
+    tls_layer: webar_net_tls_rustls_conn::TlsLayer<TlsInfoLog>,
 }
 impl MaybeHttpsLayer {
     pub(crate) fn new(root: BorrowedFd<'_>, https_only: bool) -> Result<Self, rustix::io::Errno> {
         Ok(Self {
             https_only,
-            tls_layer: super::tls::TlsLayer::new_https(root)?,
+            tls_layer: webar_net_tls_rustls_conn::TlsLayer::with_keylog_file(
+                create_file(root, c"sslkeylog.bin")?.into(),
+                create_file(root, c"sslkeylog.txt")?.into(),
+                TlsInfoLog,
+            ),
         })
     }
 }

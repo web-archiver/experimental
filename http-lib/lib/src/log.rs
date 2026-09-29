@@ -1,4 +1,4 @@
-use std::os::fd::BorrowedFd;
+use std::{ffi::CStr, os::fd::BorrowedFd};
 
 use anyhow::Context;
 use tracing::{level_filters::LevelFilter, span};
@@ -8,10 +8,7 @@ use tracing_subscriber::{
 };
 
 use webar_core::{codec::gcbor::ToGCbor, time::Timestamp};
-use webar_http_lib_core::{
-    fetch::{TRACING_DIR, TRACING_LOG_FULL_TXT, TRACING_LOG_JSON, TRACING_LOG_PRETTY_TXT},
-    utils::{create_dir, create_file, set_dir_ro},
-};
+use webar_http_lib_core::utils::{create_dir, create_file, set_dir_ro};
 
 #[derive(Clone, Copy, ToGCbor, serde::Serialize)]
 struct ThreadInfo<'a> {
@@ -154,18 +151,26 @@ where
     }
 }
 
-pub(crate) fn init(root: BorrowedFd) -> Result<(), anyhow::Error> {
-    create_dir(root, TRACING_DIR.c_path).context("failed to create tracing dir")?;
+pub(crate) struct OutPaths {
+    pub(crate) dir: &'static CStr,
+    pub(crate) log_full_txt: &'static CStr,
+    pub(crate) log_pretty_txt: &'static CStr,
+    pub(crate) log_json: &'static CStr,
+    pub(crate) log_cbor: &'static CStr,
+    pub(crate) log_gcbor: &'static CStr,
+}
+
+pub(crate) fn init(root: BorrowedFd, paths: &OutPaths) -> Result<(), anyhow::Error> {
+    create_dir(root, paths.dir).context("failed to create tracing dir")?;
     let ind = IndicatifLayer::new();
     let full_txt_file = std::fs::File::from(
-        create_file(root, TRACING_LOG_FULL_TXT.c_path)
-            .context("failed to create tracing full txt")?,
+        create_file(root, paths.log_full_txt).context("failed to create tracing full txt")?,
     );
     let pretty_txt_file = std::fs::File::from(
-        create_file(root, TRACING_LOG_PRETTY_TXT.c_path).context("failed to create tracing txt")?,
+        create_file(root, paths.log_pretty_txt).context("failed to create tracing txt")?,
     );
     let json_file = std::fs::File::from(
-        create_file(root, TRACING_LOG_JSON.c_path).context("faield to create tracing json")?,
+        create_file(root, paths.log_json).context("faield to create tracing json")?,
     );
     registry()
         .with(
@@ -212,10 +217,12 @@ pub(crate) fn init(root: BorrowedFd) -> Result<(), anyhow::Error> {
         )
         .with(ind.with_filter(IndicatifFilter::new(false)))
         .with(WriteLayer {
-            gcbor: gcbor_layer::GCborLayer::new(root).context("failed to create gcbor layer")?,
-            serde: serde_layer::SerdeLayer::new(root).context("failed to create serde layer")?,
+            gcbor: gcbor_layer::GCborLayer::new(root, paths.log_gcbor)
+                .context("failed to create gcbor layer")?,
+            serde: serde_layer::SerdeLayer::new(root, paths.log_cbor)
+                .context("failed to create serde layer")?,
         })
         .init();
-    set_dir_ro(root, TRACING_DIR.c_path).context("failed to set tracing dir mode")?;
+    set_dir_ro(root, paths.dir).context("failed to set tracing dir mode")?;
     Ok(())
 }

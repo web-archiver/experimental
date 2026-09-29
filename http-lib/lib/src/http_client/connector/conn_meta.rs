@@ -1,12 +1,11 @@
 use std::{
     os::fd::{AsFd, BorrowedFd, OwnedFd},
-    sync::Arc,
     task::Poll,
 };
 
 use webar_core::{
     codec::gcbor::{self, ToGCbor},
-    service::{OnceLayer, Service},
+    service::{AsyncService, OnceLayer},
     time::Timestamp,
 };
 use webar_http_lib_core::utils::{open_new_dir, write_file};
@@ -16,6 +15,7 @@ use crate::local_id::{self, LocalId};
 pub trait ConnectionMeta {
     fn local_id(&self) -> LocalId;
     fn data_root(&self) -> std::os::fd::BorrowedFd<'_>;
+    fn hyper_connected(&self) -> hyper_util::client::legacy::connect::Connected;
 }
 
 #[pin_project::pin_project]
@@ -24,6 +24,18 @@ pub struct WithMeta<C> {
     data_root: OwnedFd,
     #[pin]
     pub(crate) conn: C,
+}
+impl<C> WithMeta<C> {
+    #[inline]
+    pub fn get_ref(&self) -> &C {
+        &self.conn
+    }
+}
+impl<C> AsRef<C> for WithMeta<C> {
+    #[inline]
+    fn as_ref(&self) -> &C {
+        &self.conn
+    }
 }
 impl<C: hyper::rt::Read> hyper::rt::Read for WithMeta<C> {
     #[inline]
@@ -117,22 +129,20 @@ impl<C: tokio::io::AsyncWrite> tokio::io::AsyncWrite for WithMeta<C> {
         self.project().conn.poll_shutdown(cx)
     }
 }
-impl<C> hyper_util::client::legacy::connect::Connection for WithMeta<C>
+impl<C> ConnectionMeta for WithMeta<C>
 where
     C: hyper_util::client::legacy::connect::Connection,
 {
-    fn connected(&self) -> hyper_util::client::legacy::connect::Connected {
-        self.conn
-            .connected()
-            .extra(super::ConnMeta { local_id: self.id })
-    }
-}
-impl<C> ConnectionMeta for WithMeta<C> {
     fn local_id(&self) -> LocalId {
         self.id
     }
     fn data_root(&self) -> std::os::fd::BorrowedFd<'_> {
         self.data_root.as_fd()
+    }
+    fn hyper_connected(&self) -> hyper_util::client::legacy::connect::Connected {
+        self.conn
+            .connected()
+            .extra(super::ConnMeta { local_id: self.id })
     }
 }
 
@@ -151,13 +161,13 @@ pub enum Error<E> {
 }
 
 #[pin_project::pin_project]
-pub struct ConnectFuture<F> {
+pub struct ConnectFuture<'a, F> {
     local_id: LocalId,
-    log_root: Arc<OwnedFd>,
+    log_root: BorrowedFd<'a>,
     #[pin]
     inner: F,
 }
-impl<F, C, E> std::future::Future for ConnectFuture<F>
+impl<'a, F, C, E> std::future::Future for ConnectFuture<'a, F>
 where
     F: std::future::Future<Output = Result<C, E>>,
 {
@@ -201,30 +211,33 @@ where
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct ConnMetaService<S> {
     id_generator: crate::local_id::IdGenerator,
-    log_root: Arc<OwnedFd>,
+    log_root: OwnedFd,
     inner: S,
 }
-impl<S, R> Service<R> for ConnMetaService<S>
+impl<S, R> AsyncService<R> for ConnMetaService<S>
 where
-    S: Service<R>,
+    S: AsyncService<R>,
 {
     type Response = WithMeta<S::Response>;
     type Error = Error<S::Error>;
-    type Future = ConnectFuture<S::Future>;
-    fn call(&self, req: R) -> Self::Future {
+    fn call_async(
+        &self,
+        req: R,
+    ) -> impl std::prelude::rust_2024::Future<Output = Result<Self::Response, Self::Error>> + Send
+    {
         ConnectFuture {
             local_id: self.id_generator.generate(),
-            log_root: Arc::clone(&self.log_root),
-            inner: self.inner.call(req),
+            log_root: self.log_root.as_fd(),
+            inner: self.inner.call_async(req),
         }
     }
 }
 
 pub struct ConnMetaLayer {
-    log_root: Arc<OwnedFd>,
+    log_root: OwnedFd,
     id_generator: local_id::IdGenerator,
 }
 impl ConnMetaLayer {
@@ -233,10 +246,7 @@ impl ConnMetaLayer {
         id_generator: crate::local_id::IdGenerator,
     ) -> Result<Self, rustix::io::Errno> {
         Ok(Self {
-            log_root: Arc::new(webar_http_lib_core::utils::open_new_dir(
-                root,
-                c"connection",
-            )?),
+            log_root: webar_http_lib_core::utils::open_new_dir(root, c"connection")?,
             id_generator,
         })
     }

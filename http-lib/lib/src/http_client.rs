@@ -8,6 +8,7 @@ use http::{HeaderName, HeaderValue, StatusCode};
 use webar_core::{codec::gcbor::GCborCodec, digest::Digest, service::Service};
 
 use crate::blob::BlobStore;
+pub(crate) use connector::DefaultConnector;
 pub use http_service::{
     id::{MessageId, RequestId},
     ReqBody,
@@ -164,16 +165,13 @@ impl RequestBuilder {
 #[derive(Clone)]
 pub struct Client(http_service::DefaultService<connector::DefaultConnector>);
 impl Client {
-    pub(crate) fn new_direct(
+    pub(crate) fn new(
         root: BorrowedFd<'_>,
         id_generator: crate::local_id::IdGenerator,
         blob_store: Arc<BlobStore>,
         cookies: Option<cookie::CookieStore>,
-        fetcher_id: &uuid::Uuid,
-        runtime: &tokio::runtime::Runtime,
-        capture: bool,
         req_per_sec: u32,
-        connector_sock: &str,
+        connector: DefaultConnector,
     ) -> anyhow::Result<Self> {
         Ok(Self(http_service::DefaultService::new(
             root,
@@ -181,37 +179,7 @@ impl Client {
             blob_store,
             cookies.unwrap_or_default().0,
             req_per_sec,
-            connector::DefaultConnector::new_direct(
-                root,
-                runtime,
-                id_generator,
-                fetcher_id,
-                capture,
-                connector_sock,
-            )?,
-        )?))
-    }
-    pub(crate) fn new_proxy(
-        root: BorrowedFd<'_>,
-        id_generator: crate::local_id::IdGenerator,
-        blob_store: Arc<BlobStore>,
-        cookies: Option<cookie::CookieStore>,
-        capture: bool,
-        req_per_sec: u32,
-        proxy_sock: &str,
-    ) -> anyhow::Result<Self> {
-        Ok(Self(http_service::DefaultService::new(
-            root,
-            id_generator.clone(),
-            blob_store,
-            cookies.unwrap_or_default().0,
-            req_per_sec,
-            connector::DefaultConnector::new_proxy_captured(
-                root,
-                id_generator,
-                capture,
-                proxy_sock,
-            )?,
+            connector,
         )?))
     }
     pub fn request(&mut self, method: http::Method, url: Url) -> RequestBuilder {

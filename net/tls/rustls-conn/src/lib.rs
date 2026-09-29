@@ -1,8 +1,9 @@
 use std::sync::Arc;
 
-use tokio_rustls::client::TlsStream;
 use webar_core::service::{AsyncService, OnceLayer};
 use webar_net_core::io::tokio_io::{AsyncRead, AsyncWrite};
+
+pub use tokio_rustls::client::TlsStream;
 
 mod keylog_file;
 pub mod log_info;
@@ -65,6 +66,12 @@ pub struct TlsConnector<S, L> {
     lower: S,
     tls_connector: tokio_rustls::client::TlsConnector,
     logger: L,
+}
+impl<S, L> TlsConnector<S, L> {
+    #[inline]
+    pub fn get_ref(&self) -> &S {
+        &self.lower
+    }
 }
 impl<S, L, R> AsyncService<R> for TlsConnector<S, L>
 where

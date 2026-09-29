@@ -110,6 +110,26 @@ impl webar_core::service::AsyncService<TcpConnectReq> for Connector {
     }
 }
 
+/// Connector for tcp connection only, used to distinguish [SocketAddr] connect
+/// request
+pub struct TcpConnector(Connector);
+impl TcpConnector {
+    pub fn new(c: Connector) -> Self {
+        Self(c)
+    }
+}
+impl webar_core::service::AsyncService<SocketAddr> for TcpConnector {
+    type Response = tokio::net::TcpStream;
+    type Error = std::io::Error;
+    #[inline]
+    fn call_async(
+        &self,
+        req: SocketAddr,
+    ) -> impl Future<Output = Result<Self::Response, Self::Error>> + Send {
+        self.0.call_async(TcpConnectReq::new(req))
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct UdpConnectReq {
     local_addr: SocketAddr,

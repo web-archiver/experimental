@@ -2,7 +2,7 @@ use std::task::Poll;
 
 use hyper_util::rt::TokioIo;
 
-use webar_core::service::{OnceLayer, Service};
+use webar_core::service::{AsyncService, OnceLayer};
 
 use super::conn_meta::ConnectionMeta;
 
@@ -12,6 +12,9 @@ impl<C: ConnectionMeta> ConnectionMeta for TokioIo<C> {
     }
     fn data_root(&self) -> std::os::fd::BorrowedFd<'_> {
         self.inner().data_root()
+    }
+    fn hyper_connected(&self) -> hyper_util::client::legacy::connect::Connected {
+        self.inner().hyper_connected()
     }
 }
 
@@ -36,15 +39,18 @@ where
 
 #[derive(Debug, Clone)]
 pub struct TokioIoService<S>(pub S);
-impl<S, R> Service<R> for TokioIoService<S>
+impl<S, R> AsyncService<R> for TokioIoService<S>
 where
-    S: Service<R>,
+    S: AsyncService<R>,
 {
     type Response = TokioIo<S::Response>;
     type Error = S::Error;
-    type Future = TokioIoFuture<S::Future>;
-    fn call(&self, req: R) -> Self::Future {
-        TokioIoFuture(self.0.call(req))
+    fn call_async(
+        &self,
+        req: R,
+    ) -> impl std::prelude::rust_2024::Future<Output = Result<Self::Response, Self::Error>> + Send
+    {
+        TokioIoFuture(self.0.call_async(req))
     }
 }
 

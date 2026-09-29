@@ -100,6 +100,7 @@ def_tcp_info!(
 #[gcbor(rename_variants = "snake_case")]
 enum Event {
     Connected {
+        start_timestamp: Timestamp,
         local_addr: SocketAddr,
         peer_addr: SocketAddr,
     },
@@ -176,6 +177,7 @@ pub struct TcpLogger {
 impl TcpLogger {
     pub fn new(
         conn: &TcpStream,
+        start_timestamp: Timestamp,
         mut events_file: std::fs::File,
         tx_data: std::fs::File,
         rx_data: std::fs::File,
@@ -187,6 +189,7 @@ impl TcpLogger {
                 Event::Connected {
                     local_addr: conn.local_addr()?,
                     peer_addr: conn.peer_addr()?,
+                    start_timestamp,
                 },
             )?);
             events_file.write_all(event.as_bytes())?;
@@ -203,19 +206,19 @@ impl TcpLogger {
         self.events_file.write_all(event.as_bytes())
     }
 }
-impl LogRead<TcpStream> for TcpLogger {
-    fn log_read_pending(&mut self, conn: &TcpStream) -> std::io::Result<()> {
+impl<C: AsRef<TcpStream>> LogRead<C> for TcpLogger {
+    fn log_read_pending(&mut self, conn: &C) -> std::io::Result<()> {
         self.log_event(
-            conn,
+            conn.as_ref(),
             Event::RxData {
                 is_ready: false,
                 len: 0,
             },
         )
     }
-    fn log_read_ready(&mut self, conn: &TcpStream, data: &[u8]) -> std::io::Result<()> {
+    fn log_read_ready(&mut self, conn: &C, data: &[u8]) -> std::io::Result<()> {
         let event = self.ev_buf.encode(&EventEntry::new(
-            conn,
+            conn.as_ref(),
             Event::RxData {
                 is_ready: true,
                 len: data.len(),
@@ -225,10 +228,10 @@ impl LogRead<TcpStream> for TcpLogger {
         self.events_file.write_all(event.as_bytes())
     }
 }
-impl LogWrite<TcpStream> for TcpLogger {
-    fn log_write_pending(&mut self, conn: &TcpStream, buf: &[u8]) -> std::io::Result<()> {
+impl<C: AsRef<TcpStream>> LogWrite<C> for TcpLogger {
+    fn log_write_pending(&mut self, conn: &C, buf: &[u8]) -> std::io::Result<()> {
         self.log_event(
-            conn,
+            conn.as_ref(),
             Event::TxData {
                 is_ready: true,
                 buf_len: buf.len(),
@@ -236,14 +239,9 @@ impl LogWrite<TcpStream> for TcpLogger {
             },
         )
     }
-    fn log_write_ready(
-        &mut self,
-        conn: &TcpStream,
-        buf: &[u8],
-        data: &[u8],
-    ) -> std::io::Result<()> {
+    fn log_write_ready(&mut self, conn: &C, buf: &[u8], data: &[u8]) -> std::io::Result<()> {
         let event = self.ev_buf.encode(&EventEntry::new(
-            conn,
+            conn.as_ref(),
             Event::TxData {
                 is_ready: true,
                 buf_len: buf.len(),
@@ -253,16 +251,16 @@ impl LogWrite<TcpStream> for TcpLogger {
         self.tx_data.write_all(data)?;
         self.events_file.write_all(event.as_bytes())
     }
-    fn log_flush_pending(&mut self, conn: &TcpStream) -> std::io::Result<()> {
-        self.log_event(conn, Event::TxFlush { is_ready: false })
+    fn log_flush_pending(&mut self, conn: &C) -> std::io::Result<()> {
+        self.log_event(conn.as_ref(), Event::TxFlush { is_ready: false })
     }
-    fn log_flush_ready(&mut self, conn: &TcpStream) -> std::io::Result<()> {
-        self.log_event(conn, Event::TxFlush { is_ready: true })
+    fn log_flush_ready(&mut self, conn: &C) -> std::io::Result<()> {
+        self.log_event(conn.as_ref(), Event::TxFlush { is_ready: true })
     }
-    fn log_shutdown_pending(&mut self, conn: &TcpStream) -> std::io::Result<()> {
-        self.log_event(conn, Event::TxShutdown { is_ready: false })
+    fn log_shutdown_pending(&mut self, conn: &C) -> std::io::Result<()> {
+        self.log_event(conn.as_ref(), Event::TxShutdown { is_ready: false })
     }
-    fn log_shutdown_ready(&mut self, conn: &TcpStream) -> std::io::Result<()> {
-        self.log_event(conn, Event::TxShutdown { is_ready: true })
+    fn log_shutdown_ready(&mut self, conn: &C) -> std::io::Result<()> {
+        self.log_event(conn.as_ref(), Event::TxShutdown { is_ready: true })
     }
 }

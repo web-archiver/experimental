@@ -32,7 +32,7 @@ fn main() {
 
         let rt = tokio::runtime::LocalRuntime::new().unwrap();
         rt.block_on(async move {
-            let mut conn = conn.call_async(server_addr.into()).await.unwrap();
+            let mut conn = conn.call_async(server_addr).await.unwrap();
 
             conn.write_all(b"from_client").await.unwrap();
             conn.shutdown().await.unwrap();

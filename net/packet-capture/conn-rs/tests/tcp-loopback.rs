@@ -67,8 +67,7 @@ fn main() {
     let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
     let listen_addr = listener.local_addr().unwrap();
 
-    let (client_conn, server_conn) =
-        webar_net_pktcap_conn::new_connection(tracing::info_span!("sample_span")).unwrap();
+    let (client_conn, server_conn) = webar_net_pktcap_conn::new_connection().unwrap();
     match unsafe { rustix::runtime::kernel_fork() }.unwrap() {
         rustix::runtime::Fork::Child(_) => {
             let rt = tokio::runtime::LocalRuntime::new().unwrap();
@@ -118,6 +117,7 @@ fn main() {
             println!("temp path: {}", dir.path().display());
 
             let serv = webar_net_pktcap_conn::server::start_server(
+                tracing::info_span!("server"),
                 webar_net_pktcap_conn::server::OutputFiles::from_dir(
                     rustix::fs::open(
                         dir.path(),

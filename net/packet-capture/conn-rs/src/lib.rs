@@ -66,9 +66,7 @@ impl Req {
 }
 const RESP_BITS: usize = std::mem::size_of::<i32>();
 
-pub fn new_connection(
-    server_span: tracing::Span,
-) -> std::io::Result<(client::Connection, server::Connection)> {
+pub fn new_connection() -> std::io::Result<(client::Connection, server::Connection)> {
     let (client, server) = rustix::net::socketpair(
         rustix::net::AddressFamily::UNIX,
         rustix::net::SocketType::SEQPACKET,
@@ -77,10 +75,7 @@ pub fn new_connection(
     )?;
     Ok((
         client::Connection(client),
-        server::Connection {
-            conn: server,
-            span: server_span,
-        },
+        server::Connection { conn: server },
     ))
 }
 

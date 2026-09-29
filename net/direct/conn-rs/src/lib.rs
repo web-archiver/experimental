@@ -85,6 +85,18 @@ pub mod tcp {
                 .await
         }
     }
+    impl webar_core::service::AsyncService<SocketAddr> for Connector {
+        type Response = tokio::net::TcpStream;
+        type Error = std::io::Error;
+        #[inline]
+        fn call_async(
+            &self,
+            req: SocketAddr,
+        ) -> impl Future<Output = std::prelude::v1::Result<Self::Response, Self::Error>> + Send
+        {
+            self.call_async(ConnectReq::from(req))
+        }
+    }
 }
 
 pub mod udp {

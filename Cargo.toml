@@ -7,7 +7,6 @@ members = [
   "http-lib/lib",
   "http-lib/core",
   "http-lib/target-info",
-  "http-lib/direct-connector",
   "net/core-rs",
   "net/direct/conn-rs",
   "net/packet-capture/conn-rs",

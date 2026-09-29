@@ -1,7 +1,7 @@
 use std::future::Future;
 
 use anyhow::Result;
-use webar_core::service::{OnceLayer, Service};
+use webar_core::service::{AsyncService, OnceLayer};
 
 use crate::http_client::connector::conn_meta::ConnectionMeta;
 
@@ -76,6 +76,10 @@ impl<C: ConnectionMeta> ConnectionMeta for TracedConnection<C> {
     fn data_root(&self) -> std::os::fd::BorrowedFd<'_> {
         self.conn.data_root()
     }
+    #[inline]
+    fn hyper_connected(&self) -> hyper_util::client::legacy::connect::Connected {
+        self.conn.hyper_connected()
+    }
 }
 
 #[pin_project::pin_project]
@@ -109,17 +113,19 @@ where
 
 #[derive(Debug, Clone)]
 pub struct TracingService<S>(S);
-impl<S, R> Service<R> for TracingService<S>
+impl<S, R> AsyncService<R> for TracingService<S>
 where
-    S: Service<R>,
+    S: AsyncService<R>,
     S::Response: ConnectionMeta,
 {
     type Response = TracedConnection<S::Response>;
     type Error = S::Error;
-    type Future = TracingFuture<S::Future>;
-    fn call(&self, req: R) -> Self::Future {
+    fn call_async(
+        &self,
+        req: R,
+    ) -> impl Future<Output = std::prelude::v1::Result<Self::Response, Self::Error>> + Send {
         TracingFuture {
-            future: self.0.call(req),
+            future: self.0.call_async(req),
         }
     }
 }

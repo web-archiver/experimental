@@ -1,9 +1,12 @@
-use std::{fs::File, io::Write, ops::DerefMut, os::fd::BorrowedFd, sync::Mutex, time::SystemTime};
+use std::{
+    ffi::CStr, fs::File, io::Write, ops::DerefMut, os::fd::BorrowedFd, sync::Mutex,
+    time::SystemTime,
+};
 
 use anyhow::Context as _;
 use tracing_serde::{AsSerde, SerializeAttributes, SerializeEvent, SerializeId, SerializeRecord};
 
-use webar_http_lib_core::{fetch::TRACING_LOG_CBOR, utils::create_file};
+use webar_http_lib_core::utils::create_file;
 
 type EventKind<'a> =
     super::Kind<SerializeId<'a>, SerializeAttributes<'a>, SerializeRecord<'a>, SerializeEvent<'a>>;
@@ -28,10 +31,10 @@ struct Entry<'a> {
 
 pub struct SerdeLayer(Mutex<(Vec<u8>, File)>);
 impl SerdeLayer {
-    pub fn new(root: BorrowedFd) -> anyhow::Result<Self> {
+    pub fn new(root: BorrowedFd, path: &'static CStr) -> anyhow::Result<Self> {
         Ok(Self(Mutex::new((
             Vec::new(),
-            create_file(root, TRACING_LOG_CBOR.c_path)
+            create_file(root, path)
                 .context("failed to create log file")?
                 .into(),
         ))))
