@@ -268,7 +268,10 @@ impl RecordLayer {
         root: BorrowedFd<'_>,
         blob_store: Arc<BlobStore>,
     ) -> Result<Self, rustix::io::Errno> {
-        let log_file = create_file(root, c"http_record.bin")?;
+        let log_file = create_file(
+            root,
+            webar_http_lib_core::fetch::connector::HTTP_REQUESTS.c_path,
+        )?;
         Ok(Self {
             blob_store,
             state: Arc::new(Mutex::new(State {

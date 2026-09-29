@@ -208,11 +208,9 @@ impl DefaultConnector {
     fn new_inner(root: BorrowedFd<'_>, base: BaseConnector) -> anyhow::Result<Self> {
         let inner = ServiceBuilder::new(base)
             .once_layer(https::MaybeHttpsLayer::new(root, true)?)
-            .once_layer(capture::CaptureLayer::new(&capture::CaptureConfig {
-                event_path: c"tls_events.bin",
-                tx_path: c"tls_tx_data",
-                rx_path: c"tls_rx_data",
-            }))
+            .once_layer(capture::CaptureLayer::new(
+                &webar_http_lib_core::fetch::connection::TLS_LOG_FILES,
+            ))
             .once_layer(super::tracing::TracingLayer::new())
             .once_layer(tokio_io::TokioIoLayer::new())
             .once_layer(uri_parser::UriParseLayer)
@@ -263,11 +261,9 @@ impl DefaultConnector {
                 root,
                 id_generator,
             )?)
-            .once_layer(capture::CaptureLayer::new(&capture::CaptureConfig {
-                event_path: c"proxy_events.bin",
-                tx_path: c"proxy_tx_data.bin",
-                rx_path: c"proxy_rx_data.bin",
-            }))
+            .once_layer(capture::CaptureLayer::new(
+                &webar_http_lib_core::fetch::connection::PROXY_LOG_FILES,
+            ))
             .build();
         Self::new_inner(root, BaseConnector::HttpTunnel(base))
     }

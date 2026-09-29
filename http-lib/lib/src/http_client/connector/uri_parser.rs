@@ -44,7 +44,6 @@ where
             }
         };
         let req = super::ConnectReq {
-            uri: &req,
             host_str,
             host,
             port,

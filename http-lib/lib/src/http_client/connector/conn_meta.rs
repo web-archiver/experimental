@@ -189,7 +189,7 @@ where
                 .and_then(|dir| {
                     write_file(
                         dir.as_fd(),
-                        c"meta.bin",
+                        webar_http_lib_core::fetch::connection::METADATA.c_path,
                         &gcbor::to_vec(&MetaInfo {
                             id,
                             start_timestamp: Timestamp::now(),
@@ -246,7 +246,10 @@ impl ConnMetaLayer {
         id_generator: crate::local_id::IdGenerator,
     ) -> Result<Self, rustix::io::Errno> {
         Ok(Self {
-            log_root: webar_http_lib_core::utils::open_new_dir(root, c"connection")?,
+            log_root: webar_http_lib_core::utils::open_new_dir(
+                root,
+                webar_http_lib_core::fetch::connector::CONNECTION_DIR.c_path,
+            )?,
             id_generator,
         })
     }

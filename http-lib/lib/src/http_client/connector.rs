@@ -1,9 +1,5 @@
 use std::net::IpAddr;
 
-/// max size of protocol handshake
-/// Use in capture config
-const CAPTURE_HANDSHAKE_SIZE: u64 = 512 * 1024;
-
 #[derive(Clone)]
 pub struct ConnMeta {
     pub(crate) local_id: crate::local_id::LocalId,
@@ -14,7 +10,6 @@ enum Host<'a> {
     Domain(&'a str),
 }
 struct ConnectReq<'a> {
-    uri: &'a http::Uri,
     host: Host<'a>,
     host_str: &'a str,
     port: u16,

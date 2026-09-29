@@ -8,7 +8,10 @@ use tracing_subscriber::{
 };
 
 use webar_core::{codec::gcbor::ToGCbor, time::Timestamp};
-use webar_http_lib_core::utils::{create_dir, create_file, set_dir_ro};
+use webar_http_lib_core::{
+    fetch::TracingFilePaths,
+    utils::{create_dir, create_file, set_dir_ro},
+};
 
 #[derive(Clone, Copy, ToGCbor, serde::Serialize)]
 struct ThreadInfo<'a> {
@@ -151,16 +154,7 @@ where
     }
 }
 
-pub(crate) struct OutPaths {
-    pub(crate) dir: &'static CStr,
-    pub(crate) log_full_txt: &'static CStr,
-    pub(crate) log_pretty_txt: &'static CStr,
-    pub(crate) log_json: &'static CStr,
-    pub(crate) log_cbor: &'static CStr,
-    pub(crate) log_gcbor: &'static CStr,
-}
-
-pub(crate) fn init(root: BorrowedFd, paths: &OutPaths) -> Result<(), anyhow::Error> {
+pub(crate) fn init(root: BorrowedFd, paths: &TracingFilePaths) -> Result<(), anyhow::Error> {
     create_dir(root, paths.dir).context("failed to create tracing dir")?;
     let ind = IndicatifLayer::new();
     let full_txt_file = std::fs::File::from(

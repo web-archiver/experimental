@@ -5,7 +5,7 @@ use webar_core::{
     service::{AsyncService, OnceLayer},
     time::Timestamp,
 };
-use webar_http_lib_core::utils::create_file;
+use webar_http_lib_core::{fetch::connection::TCP_LOG_FILES, utils::create_file};
 use webar_net_tcp_log_conn::TcpLogger;
 
 use crate::http_client::connector::conn_meta::WithMeta;
@@ -38,11 +38,11 @@ where
         match proj.inner.poll(cx) {
             Poll::Pending => Poll::Pending,
             Poll::Ready(Ok(conn)) => {
-                match create_file(conn.data_root(), c"tcp_events.bin")
+                match create_file(conn.data_root(), TCP_LOG_FILES.event_path)
                     .map_err(std::io::Error::from)
                     .and_then(|events| {
-                        let tx_data = create_file(conn.data_root(), c"tcp_tx_data")?;
-                        let rx_data = create_file(conn.data_root(), c"tcp_rx_data")?;
+                        let tx_data = create_file(conn.data_root(), TCP_LOG_FILES.tx_path)?;
+                        let rx_data = create_file(conn.data_root(), TCP_LOG_FILES.rx_path)?;
                         TcpLogger::new(
                             conn.get_ref(),
                             *proj.start_timestamp,

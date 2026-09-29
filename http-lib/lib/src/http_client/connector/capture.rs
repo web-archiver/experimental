@@ -1,17 +1,10 @@
-use std::{ffi::CStr, future::Future, os::fd::BorrowedFd, task::Poll};
+use std::{future::Future, os::fd::BorrowedFd, task::Poll};
 
 use webar_core::service::{AsyncService, OnceLayer};
-use webar_http_lib_core::utils::create_file;
+use webar_http_lib_core::{fetch::connection::CaptureFilePaths, utils::create_file};
 use webar_net_stream_log_conn::{data_log, Connection};
 
 use super::conn_meta::ConnectionMeta;
-
-#[derive(Debug, Clone)]
-pub struct CaptureConfig {
-    pub event_path: &'static CStr,
-    pub tx_path: &'static CStr,
-    pub rx_path: &'static CStr,
-}
 
 impl<C: ConnectionMeta, L> ConnectionMeta for Connection<C, L> {
     fn local_id(&self) -> crate::local_id::LocalId {
@@ -33,10 +26,9 @@ pub enum Error<E> {
     Inner(#[source] E),
 }
 
-#[derive(Debug)]
 #[pin_project::pin_project]
 pub struct ConnectFuture<F> {
-    config: &'static CaptureConfig,
+    config: &'static CaptureFilePaths,
     #[pin]
     inner: F,
 }
@@ -72,7 +64,7 @@ where
 #[derive(Debug, Clone)]
 pub struct Capture<S> {
     inner: S,
-    config: &'static CaptureConfig,
+    config: &'static CaptureFilePaths,
 }
 
 impl<R, S> AsyncService<R> for Capture<S>
@@ -93,9 +85,9 @@ where
     }
 }
 
-pub struct CaptureLayer(&'static CaptureConfig);
+pub struct CaptureLayer(&'static CaptureFilePaths);
 impl CaptureLayer {
-    pub(crate) fn new(config: &'static CaptureConfig) -> Self {
+    pub(crate) fn new(config: &'static CaptureFilePaths) -> Self {
         Self(config)
     }
 }

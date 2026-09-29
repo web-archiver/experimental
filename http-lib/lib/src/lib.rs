@@ -11,7 +11,7 @@ use webar_core::{
     codec::gcbor::{self, ToGCbor},
     time::{TimePeriod, Timestamp},
 };
-use webar_http_lib_core::utils::{create_dir, create_file, open_new_dir, write_file};
+use webar_http_lib_core::utils::{create_dir, create_file, open_new_dir};
 
 pub mod blob;
 pub mod data_tar;
@@ -142,9 +142,12 @@ impl<'a> CSPreFork<'a> {
                 webar_net_pktcap_conn::server::start_server(
                     span,
                     webar_net_pktcap_conn::server::OutputFiles::from_dir(
-                        open_new_dir(root, c"dumpcap")
-                            .context("failed to create dumpcap dir")?
-                            .as_fd(),
+                        open_new_dir(
+                            root,
+                            webar_http_lib_core::fetch::connector::DUMPCAP_DIR.c_path,
+                        )
+                        .context("failed to create dumpcap dir")?
+                        .as_fd(),
                     )
                     .context("failed to create output files")?,
                     std::iter::once(conn),
@@ -259,7 +262,8 @@ fn run(
     blob_store.save().context("failed to finish blob store")?;
     std::io::Write::write_all(
         &mut std::fs::File::from(
-            create_file(root, c"info.bin").context("failed to create info file")?,
+            create_file(root, webar_http_lib_core::fetch::FETCH_INFO.c_path)
+                .context("failed to create info file")?,
         ),
         &gcbor::to_vec(&FetchInfo {
             uuid,
@@ -345,7 +349,10 @@ pub fn run_fetcher(
         fs::Mode::empty(),
     )
     .context("failed to open root dir")?;
-    create_dir(root.as_fd(), c"connector")?;
+    create_dir(
+        root.as_fd(),
+        webar_http_lib_core::fetch::CONNECTORS_DIR.c_path,
+    )?;
     let primary_conn_root = open_new_dir(root.as_fd(), c"connector/primary")?;
     let primary_connector = ConnectorState::new(&args.primary_connector)
         .pre_fork()
@@ -354,17 +361,7 @@ pub fn run_fetcher(
 
     match unsafe { rustix::runtime::kernel_fork() }.context("failed to fork child")? {
         rustix::runtime::Fork::Child(_) => {
-            if let Err(e) = log::init(
-                root.as_fd(),
-                &log::OutPaths {
-                    dir: c"tracing-main",
-                    log_gcbor: c"tracing-main/gcbor.log.bin",
-                    log_cbor: c"tracing-main/serde-cbor.log.bin",
-                    log_pretty_txt: c"tracing-main/text_pretty.log.txt",
-                    log_full_txt: c"tracing-main/text_full.log.txt",
-                    log_json: c"tracing-main/serde-json.log.json",
-                },
-            ) {
+            if let Err(e) = log::init(root.as_fd(), &webar_http_lib_core::fetch::TRACING_MAIN) {
                 return Err(e.context("failed to init tracing"));
             }
 
@@ -388,17 +385,8 @@ pub fn run_fetcher(
             }
         }
         rustix::runtime::Fork::ParentOf(pid) => {
-            if let Err(e) = log::init(
-                root.as_fd(),
-                &log::OutPaths {
-                    dir: c"tracing-connector",
-                    log_gcbor: c"tracing-connector/gcbor.log.bin",
-                    log_cbor: c"tracing-connector/serde-cbor.log.bin",
-                    log_pretty_txt: c"tracing-connector/text_pretty.log.txt",
-                    log_full_txt: c"tracing-connector/text_full.log.txt",
-                    log_json: c"tracing-connector/serde-json.json",
-                },
-            ) {
+            if let Err(e) = log::init(root.as_fd(), &webar_http_lib_core::fetch::TRACING_CONNECTOR)
+            {
                 return Err(e.context("failed to init tracing for parent"));
             }
 

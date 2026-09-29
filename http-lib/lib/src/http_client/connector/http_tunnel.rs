@@ -8,10 +8,6 @@ pub enum Error<E> {
     Inner(#[source] E),
     #[error("io error")]
     Io(#[source] std::io::Error),
-    #[error("missing host")]
-    MissingHost,
-    #[error("missing port")]
-    UnknownPort,
     #[error("unexpected eof")]
     UnexpectedEof,
     #[error("proxy header too long")]

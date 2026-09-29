@@ -1,7 +1,10 @@
 use std::{os::fd::BorrowedFd, task::Poll};
 
 use webar_core::service::{AsyncService, OnceLayer};
-use webar_http_lib_core::utils::create_file;
+use webar_http_lib_core::{
+    fetch::connector::{SSL_KEYLOG_CBOR, SSL_KEYLOG_TXT},
+    utils::create_file,
+};
 use webar_net_tls_rustls_conn::TlsStream;
 
 use super::conn_meta::ConnectionMeta;
@@ -108,7 +111,11 @@ impl<C: ConnectionMeta> webar_net_tls_rustls_conn::LogConnected<C> for TlsInfoLo
         tls_connection: &rustls::client::ClientConnection,
     ) -> Result<(), Self::Error> {
         webar_net_tls_rustls_conn::log_info::write_info_file(
-            &mut create_file(lower_conn.data_root(), c"tls_info.bin")?.into(),
+            &mut create_file(
+                lower_conn.data_root(),
+                webar_http_lib_core::fetch::connection::TLS_INFO_FILE.c_path,
+            )?
+            .into(),
             tls_connection,
         )
     }
@@ -183,8 +190,8 @@ impl MaybeHttpsLayer {
         Ok(Self {
             https_only,
             tls_layer: webar_net_tls_rustls_conn::TlsLayer::with_keylog_file(
-                create_file(root, c"sslkeylog.bin")?.into(),
-                create_file(root, c"sslkeylog.txt")?.into(),
+                create_file(root, SSL_KEYLOG_CBOR.c_path)?.into(),
+                create_file(root, SSL_KEYLOG_TXT.c_path)?.into(),
                 TlsInfoLog,
             ),
         })
