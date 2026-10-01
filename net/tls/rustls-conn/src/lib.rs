@@ -112,7 +112,12 @@ pub struct TlsLayer<L> {
     logger: L,
 }
 impl<L> TlsLayer<L> {
-    pub fn with_keylog_file(cbor_file: std::fs::File, text_file: std::fs::File, logger: L) -> Self {
+    pub fn with_keylog_file(
+        cbor_file: std::fs::File,
+        text_file: std::fs::File,
+        logger: L,
+        alpn: Vec<Vec<u8>>,
+    ) -> Self {
         let mut cfg = rustls::ClientConfig::builder_with_provider(Arc::new(
             rustls::crypto::aws_lc_rs::default_provider(),
         ))
@@ -126,6 +131,7 @@ impl<L> TlsLayer<L> {
         cfg.key_log = Arc::new(crate::keylog_file::FileKeyLog::from_files(
             cbor_file, text_file,
         ));
+        cfg.alpn_protocols = alpn;
         Self {
             tls_cfg: cfg,
             logger,

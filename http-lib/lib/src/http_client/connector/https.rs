@@ -193,6 +193,7 @@ impl MaybeHttpsLayer {
                 create_file(root, SSL_KEYLOG_CBOR.c_path)?.into(),
                 create_file(root, SSL_KEYLOG_TXT.c_path)?.into(),
                 TlsInfoLog,
+                [b"h2".to_vec(), b"http/1.1".to_vec()].into(),
             ),
         })
     }
