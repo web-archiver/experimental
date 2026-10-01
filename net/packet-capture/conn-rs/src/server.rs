@@ -32,6 +32,7 @@ async fn serve_connection(sock: OwnedFd) -> std::io::Result<()> {
     let mut buf = [0; Req::SIZE];
     loop {
         match sock.recv(&mut buf).await {
+            Ok(0) => break, // connection closed
             Ok(Req::SIZE) => (),
             Ok(_) => {
                 return Err(std::io::Error::other("invalid message size"));
