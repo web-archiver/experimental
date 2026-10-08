@@ -12,7 +12,7 @@ use webar_core::{
     digest::{Digest, Sha256},
     object::Package,
 };
-use webar_http_lib_core::utils::{create_file, open_new_dir, set_dir_ro, write_file};
+use webar_utils_fs::{create_file, open_new_dir, set_dir_ro, write_file};
 
 pub struct CborFile {
     val_buf: ValueBuf,

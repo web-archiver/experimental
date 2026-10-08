@@ -13,7 +13,8 @@ use webar_core::{
     digest::Digest,
     service::{OnceLayer, Service},
 };
-use webar_http_lib_core::{blob::Info as BlobInfo, utils::create_file};
+use webar_http_lib_core::blob::Info as BlobInfo;
+use webar_utils_fs::create_file;
 
 use super::{id, save_body::SavedData, timing::Timing};
 use crate::{blob::BlobStore, http_client::compressible};

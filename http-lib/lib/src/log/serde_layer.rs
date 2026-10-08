@@ -6,7 +6,7 @@ use std::{
 use anyhow::Context as _;
 use tracing_serde::{AsSerde, SerializeAttributes, SerializeEvent, SerializeId, SerializeRecord};
 
-use webar_http_lib_core::utils::create_file;
+use webar_utils_fs::create_file;
 
 type EventKind<'a> =
     super::Kind<SerializeId<'a>, SerializeAttributes<'a>, SerializeRecord<'a>, SerializeEvent<'a>>;

@@ -6,95 +6,28 @@ use std::{
 
 use anyhow::{Context, Result};
 use rustix::fs;
+
 use webar_core::{
     codec::gcbor::{self, map::GCborMap, set::GCborSet},
-    digest::{Digest, Hasher},
+    digest::Digest,
 };
-
 use webar_http_lib_core::{
-    blob::{index::Index, store::Store, Info},
+    blob::Info,
     fetch::{BLOB_INCREMENTAL_INFO_FILE, BLOB_INCREMENTAL_STORE},
-    utils::{create_dir, create_file, open_new_dir, write_fd},
     FilePath,
 };
+use webar_store_backend_fs::blob::{
+    index::Index,
+    store::{BlobFile, Store},
+};
+use webar_utils_fs::{create_dir, create_file, open_new_dir, write_fd};
 
 const TMP_DIR: FilePath = FilePath::new_throw(c"blob/tmp");
 
 type IncrementalInfo =
-    webar_http_lib_core::blob::IncrementalInfo<GCborSet<Digest>, GCborMap<Digest, Info>>;
+    webar_store_backend_fs::blob::IncrementalInfo<GCborSet<Digest>, GCborMap<Digest, Info>>;
 
 pub type Error = anyhow::Error;
-
-pub struct BlobWriter {
-    file: std::io::BufWriter<std::fs::File>,
-    size: usize,
-    hasher: Hasher,
-}
-impl BlobWriter {
-    pub fn new(store: &BlobStore) -> Result<Self> {
-        let fd = fs::openat(
-            store.tmp_dir.as_fd(),
-            c".",
-            fs::OFlags::CREATE | fs::OFlags::RDWR | fs::OFlags::CLOEXEC | fs::OFlags::TMPFILE,
-            fs::Mode::from_raw_mode(0o444),
-        )
-        .context("failed to create tmp file")?;
-        Ok(Self {
-            file: std::io::BufWriter::new(fd.into()),
-            size: 0,
-            hasher: Hasher::new(),
-        })
-    }
-    pub fn finish(self) -> Result<BlobFile> {
-        let file = self.file.into_inner().context("failed to flush buffer")?;
-        Ok(BlobFile {
-            file,
-            size: self.size,
-            digest: self.hasher.finalize(),
-            compressible: None,
-        })
-    }
-}
-impl std::io::Write for BlobWriter {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        let l = self.file.write(buf)?;
-        self.hasher.update(&buf[0..l]);
-        self.size += l;
-        Ok(l)
-    }
-    fn write_all(&mut self, buf: &[u8]) -> std::io::Result<()> {
-        self.file.write_all(buf)?;
-        self.hasher.update(buf);
-        self.size += buf.len();
-        Ok(())
-    }
-    fn flush(&mut self) -> std::io::Result<()> {
-        self.file.flush()
-    }
-}
-pub struct BlobFile {
-    file: std::fs::File,
-    size: usize,
-    digest: Digest,
-    compressible: Option<bool>,
-}
-impl BlobFile {
-    pub fn size(&self) -> usize {
-        self.size
-    }
-    pub fn digest(&self) -> &Digest {
-        &self.digest
-    }
-    pub fn compressible(&self) -> Option<bool> {
-        self.compressible
-    }
-    pub fn compressible_mut(&mut self) -> &mut Option<bool> {
-        &mut self.compressible
-    }
-    pub fn set_compressible(&mut self, compressible: Option<bool>) {
-        self.compressible = compressible;
-    }
-}
 
 pub struct BlobStore {
     store: Store,
@@ -181,30 +114,23 @@ impl BlobStore {
         Ok(())
     }
 
-    pub fn add_file(&self, file: &BlobFile) -> Result<Digest> {
+    pub fn add_file(&self, file: &BlobFile, info: Info) -> Result<Digest> {
         match &self.shared_index {
-            Some(idx) if idx.exists(&file.digest)? => {
+            Some(idx) if idx.exists(&file.digest())? => {
                 self.incremental_info
                     .lock()
                     .unwrap()
                     .existing
-                    .insert(file.digest);
+                    .insert(*file.digest());
             }
             _ => {
                 self.store
-                    .link_fd(&file.digest, file.file.as_fd())
+                    .add_blob_file(file)
                     .context("failed to write to store")?;
-
-                self.update_info(
-                    &file.digest,
-                    Info {
-                        size: file.size as u64,
-                        is_compressible: file.compressible,
-                    },
-                );
+                self.update_info(file.digest(), info);
             }
         }
-        Ok(file.digest)
+        Ok(*file.digest())
     }
 
     pub(crate) fn save(&self) -> Result<()> {

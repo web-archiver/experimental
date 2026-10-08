@@ -18,12 +18,6 @@ impl FilePath {
 pub mod fetch;
 
 pub mod blob {
-    #[derive(webar_core::codec::gcbor:: GCborCodec)]
-    pub struct IncrementalInfo<E, A> {
-        pub existing: E,
-        pub additional: A,
-    }
-
     #[derive(Debug, Clone, webar_core::codec::gcbor::GCborCodec)]
     pub struct Info {
         pub size: u64,
@@ -31,13 +25,8 @@ pub mod blob {
         #[gcbor(omissible)]
         pub is_compressible: Option<bool>,
     }
-
-    pub mod index;
-    pub mod store;
 }
 
 pub mod object {
     pub mod index;
 }
-
-pub mod utils;

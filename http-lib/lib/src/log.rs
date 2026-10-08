@@ -1,4 +1,4 @@
-use std::{ffi::CStr, os::fd::BorrowedFd};
+use std::os::fd::BorrowedFd;
 
 use anyhow::Context;
 use tracing::{level_filters::LevelFilter, span};
@@ -8,10 +8,8 @@ use tracing_subscriber::{
 };
 
 use webar_core::{codec::gcbor::ToGCbor, time::Timestamp};
-use webar_http_lib_core::{
-    fetch::TracingFilePaths,
-    utils::{create_dir, create_file, set_dir_ro},
-};
+use webar_http_lib_core::fetch::TracingFilePaths;
+use webar_utils_fs::{create_dir, create_file, set_dir_ro};
 
 #[derive(Clone, Copy, ToGCbor, serde::Serialize)]
 struct ThreadInfo<'a> {

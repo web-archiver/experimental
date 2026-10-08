@@ -1,8 +1,9 @@
 use std::{future::Future, os::fd::BorrowedFd, task::Poll};
 
 use webar_core::service::{AsyncService, OnceLayer};
-use webar_http_lib_core::{fetch::connection::CaptureFilePaths, utils::create_file};
+use webar_http_lib_core::fetch::connection::CaptureFilePaths;
 use webar_net_stream_log_conn::{data_log, Connection};
+use webar_utils_fs::create_file;
 
 use super::conn_meta::ConnectionMeta;
 

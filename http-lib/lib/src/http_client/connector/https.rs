@@ -1,11 +1,9 @@
 use std::{os::fd::BorrowedFd, task::Poll};
 
 use webar_core::service::{AsyncService, OnceLayer};
-use webar_http_lib_core::{
-    fetch::connector::{SSL_KEYLOG_CBOR, SSL_KEYLOG_TXT},
-    utils::create_file,
-};
+use webar_http_lib_core::fetch::connector::{SSL_KEYLOG_CBOR, SSL_KEYLOG_TXT};
 use webar_net_tls_rustls_conn::TlsStream;
+use webar_utils_fs::create_file;
 
 use super::conn_meta::ConnectionMeta;
 

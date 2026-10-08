@@ -8,6 +8,8 @@ use webar_http_lib::http_client::cookie::CookieStore;
 struct Cli {
     #[arg(long)]
     cookie_file: String,
+    #[arg(long)]
+    blob_index: Option<String>,
     root: String,
 }
 fn main() -> anyhow::Result<()> {
@@ -27,6 +29,7 @@ fn main() -> anyhow::Result<()> {
                 )
                 .context("failed to decode cookie file")?,
             );
+            cfg.shared_blob_index = cli.blob_index.as_deref();
             cfg
         },
         |ctx| {

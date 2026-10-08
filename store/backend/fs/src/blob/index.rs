@@ -11,27 +11,27 @@ pub struct Index {
     conn: Connection,
 }
 impl Index {
-    pub fn open_ro(path: &str) -> Result<Self> {
+    pub fn open_ro(path: impl AsRef<std::path::Path>) -> Result<Self> {
         Ok(Self {
             conn: Connection::open_with_flags(
-                path,
+                path.as_ref(),
                 OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
             )?,
         })
     }
-    pub fn open_rw(path: &str) -> Result<Self> {
+    pub fn open_rw(path: impl AsRef<std::path::Path>) -> Result<Self> {
         Ok(Self {
             conn: Connection::open_with_flags(
-                path,
+                path.as_ref(),
                 OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
             )?,
         })
     }
-    pub fn create(path: &str) -> Result<Self> {
+    pub fn create(path: impl AsRef<std::path::Path>) -> Result<Self> {
         let conn = Connection::open(path)?;
         conn.execute_batch(concat!(
             "create table if not exists sha256 (",
-            "  sha256 blob primary key,",
+            "  sha256 blob primary key",
             ") strict;",
         ))?;
         Ok(Self { conn })

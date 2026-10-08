@@ -9,7 +9,7 @@ use rustix::{
 };
 
 use webar_core::digest::{Digest, Hasher, Sha256};
-use webar_utils_fs::{create_dir, open_new_dir, set_dir_ro, write_file};
+use webar_utils_fs::{create_dir, open_dir, set_dir_ro, write_file};
 
 const SHA256_DIR: &str = "sha256";
 const SHA256_LEN: usize = 64;
@@ -97,7 +97,12 @@ pub struct Store {
 }
 impl Store {
     pub fn create(parent: BorrowedFd, path: &CStr) -> Result<Self> {
-        let root = open_new_dir(parent, path)?;
+        match create_dir(parent, path) {
+            Ok(()) => (),
+            Err(Errno::EXIST) => (),
+            Err(e) => return Err(e),
+        }
+        let root = open_dir(parent, path)?;
         create_dir(root.as_fd(), c"sha256")?;
         Ok(Self { root })
     }

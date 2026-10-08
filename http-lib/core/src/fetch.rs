@@ -79,6 +79,7 @@ pub const CONNECTORS_DIR: FilePath = FilePath::new_throw(c"connector");
 pub const FETCH_INFO: FilePath = FilePath::new_throw(c"info.cbor");
 
 pub const BLOB_INCREMENTAL_STORE: FilePath = FilePath::new_throw(c"blob/incremental");
+pub const BLOB_FULL_STORE: FilePath = FilePath::new_throw(c"blob/full");
 pub const BLOB_INCREMENTAL_INFO_FILE: FilePath = FilePath::new_throw(c"blob/incremental.bin");
 
 pub const HTTP_DATA: FilePath = FilePath::new_throw(c"http.tar");

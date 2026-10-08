@@ -4,8 +4,9 @@ members = [
   "core/rs-internal",
   "core/rs-macros",
   "core/rs",
-  "http-lib/lib",
   "http-lib/core",
+  "http-lib/lib",
+  "http-lib/cli",
   "http-lib/target-info",
   "net/core-rs",
   "net/direct/conn-rs",
@@ -57,5 +58,6 @@ clap = { version = "4.6.1", features = ["derive", "env"] }
 tokio = "1.43.0"
 pin-project = "1.1.13"
 webar-core = { path = "./core/rs" }
+webar-store-backend-fs = { path = "./store/backend/fs" }
 webar-net-core = { path = "./net/core-rs" }
 webar-utils-fs = { path = "./utils/fs" }

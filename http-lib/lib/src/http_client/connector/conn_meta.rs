@@ -8,7 +8,7 @@ use webar_core::{
     service::{AsyncService, OnceLayer},
     time::Timestamp,
 };
-use webar_http_lib_core::utils::{open_new_dir, write_file};
+use webar_utils_fs::{open_new_dir, write_file};
 
 use crate::local_id::{self, LocalId};
 
@@ -246,7 +246,7 @@ impl ConnMetaLayer {
         id_generator: crate::local_id::IdGenerator,
     ) -> Result<Self, rustix::io::Errno> {
         Ok(Self {
-            log_root: webar_http_lib_core::utils::open_new_dir(
+            log_root: open_new_dir(
                 root,
                 webar_http_lib_core::fetch::connector::CONNECTION_DIR.c_path,
             )?,

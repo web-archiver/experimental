@@ -6,7 +6,7 @@ use std::{
 
 use anyhow::Context;
 use webar_core::codec::gcbor::{EncodedVal, ToGCbor, ValueBuf};
-use webar_http_lib_core::utils::{create_dir, create_file, open_new_dir, write_file};
+use webar_utils_fs::{create_dir, create_file, open_new_dir, write_file};
 
 pub type Error = anyhow::Error;
 

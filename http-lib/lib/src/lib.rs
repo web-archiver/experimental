@@ -11,7 +11,7 @@ use webar_core::{
     codec::gcbor::{self, ToGCbor},
     time::{TimePeriod, Timestamp},
 };
-use webar_http_lib_core::utils::{create_dir, create_file, open_new_dir};
+use webar_utils_fs::{create_dir, create_file, open_new_dir};
 
 pub mod blob;
 pub mod data_writer;
@@ -286,7 +286,7 @@ fn map_user_groups(
             rustix::fs::OFlags::WRONLY | rustix::fs::OFlags::CLOEXEC,
             rustix::fs::Mode::empty(),
         )?;
-        webar_http_lib_core::utils::write_fd(fd.as_fd(), data)
+        webar_utils_fs::write_fd(fd.as_fd(), data)
     }
 
     buf.clear();

@@ -71,5 +71,7 @@ webar-net-pktcap-conn = { path = "../../net/packet-capture/conn-rs" }
 webar-net-stream-log-conn = { path = "../../net/stream-log/conn-rs" }
 webar-net-tcp-log-conn = { path = "../../net/tcp/logger" }
 webar-net-tls-rustls-conn = { path = "../../net/tls/rustls-conn" }
+webar-store-backend-fs.workspace = true
+webar-utils-fs.workspace = true
 httpdate = "1.0.3"
 tar.workspace = true
