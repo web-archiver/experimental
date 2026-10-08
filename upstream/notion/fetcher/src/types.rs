@@ -1,64 +1,7 @@
-use std::marker::PhantomData;
-
 use serde::Deserialize;
 use uuid::Uuid;
 
-pub struct VecMap<K, V>(pub Vec<(K, V)>);
-impl<K, V> Default for VecMap<K, V> {
-    fn default() -> Self {
-        Self(Vec::new())
-    }
-}
-impl<'de, K, V> serde::Deserialize<'de> for VecMap<K, V>
-where
-    K: serde::Deserialize<'de>,
-    V: serde::Deserialize<'de>,
-{
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        struct MapVisitor<K, V>(PhantomData<fn() -> (K, V)>);
-        impl<'de, K, V> serde::de::Visitor<'de> for MapVisitor<K, V>
-        where
-            K: serde::Deserialize<'de>,
-            V: serde::Deserialize<'de>,
-        {
-            type Value = VecMap<K, V>;
-            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-                formatter.write_str("map")
-            }
-            fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
-            where
-                A: serde::de::MapAccess<'de>,
-            {
-                let mut ret = match map.size_hint() {
-                    Some(sz) => Vec::with_capacity(sz),
-                    None => Vec::new(),
-                };
-                while let Some(p) = map.next_entry()? {
-                    ret.push(p);
-                }
-                Ok(VecMap(ret))
-            }
-        }
-        deserializer.deserialize_map(MapVisitor(PhantomData))
-    }
-}
-impl<'a, K, V> IntoIterator for &'a VecMap<K, V> {
-    type Item = &'a (K, V);
-    type IntoIter = std::slice::Iter<'a, (K, V)>;
-    fn into_iter(self) -> Self::IntoIter {
-        self.0.iter()
-    }
-}
-impl<K, V> IntoIterator for VecMap<K, V> {
-    type Item = (K, V);
-    type IntoIter = std::vec::IntoIter<(K, V)>;
-    fn into_iter(self) -> Self::IntoIter {
-        self.0.into_iter()
-    }
-}
+use crate::model::{SpaceId, VecMap};
 
 macro_rules! const_enum {
     ($i:ident, $c:ident, $v:literal) => {
@@ -78,26 +21,30 @@ impl UserTimeZone {
 #[non_exhaustive]
 pub struct Role(serde::de::IgnoredAny);
 
+#[inline]
+const fn missing_option_field<T>() -> Option<T> {
+    None
+}
+
 #[derive(Deserialize)]
 #[serde(untagged)]
 #[non_exhaustive]
 pub enum RoleVal<T> {
-    WithRole { role: Role, value: T },
-    NoRole(T),
+    WithRole {
+        role: Role,
+        #[serde(default = "missing_option_field")]
+        value: Option<T>,
+    },
+    // NoRole(T),
 }
 
 #[derive(Deserialize)]
 #[non_exhaustive]
 pub struct WithRole<T> {
+    #[serde(rename = "spaceId")]
+    #[serde(default)]
+    pub space_id: Option<SpaceId>,
     pub value: RoleVal<T>,
-}
-impl<T> WithRole<T> {
-    pub fn get_ref(&self) -> &T {
-        match &self.value {
-            RoleVal::NoRole(v) => v,
-            RoleVal::WithRole { value, .. } => value,
-        }
-    }
 }
 
 #[derive(Deserialize)]
@@ -106,9 +53,19 @@ pub struct RecordMap {
     #[serde(default)]
     pub block: VecMap<Uuid, WithRole<crate::model::block::Block>>,
     #[serde(default)]
-    pub collection: VecMap<Uuid, WithRole<crate::model::Collection>>,
+    pub collection: VecMap<Uuid, WithRole<crate::model::collection::Collection>>,
     #[serde(default)]
-    pub collection_view: VecMap<Uuid, WithRole<crate::model::CollectionView>>,
+    pub collection_view: VecMap<Uuid, WithRole<crate::model::collection_view::CollectionView>>,
+    #[serde(default)]
+    pub(crate) automation: VecMap<Uuid, WithRole<crate::model::Automation>>,
+    #[serde(default)]
+    pub(crate) automation_action: VecMap<Uuid, WithRole<crate::model::AutomationAction>>,
+    #[serde(default)]
+    pub(crate) discussion: VecMap<Uuid, WithRole<crate::model::Discussion>>,
+    #[serde(default)]
+    pub(crate) space: VecMap<Uuid, WithRole<crate::model::Space>>,
+    #[serde(default)]
+    pub(crate) team: VecMap<Uuid, WithRole<crate::model::Team>>,
 }
 
 pub mod load_cached_page_chunk_v2 {
@@ -148,6 +105,9 @@ pub mod load_cached_page_chunk_v2 {
         pub record_map: super::RecordMap,
         #[serde(rename = "spaceId")]
         pub space_id: Uuid,
+        #[serde(rename = "dedupeSessionId")]
+        #[serde(default)]
+        pub(crate) dedupe_session_id: Option<Uuid>,
     }
 }
 
@@ -168,6 +128,11 @@ pub mod query_collection {
     }
 
     #[derive(Serialize)]
+    pub(crate) struct ReqCollection {
+        pub id: Uuid,
+    }
+
+    #[derive(Serialize)]
     pub(crate) struct ReqCollectionView {
         pub id: Uuid,
         #[serde(rename = "spaceId")]
@@ -177,6 +142,7 @@ pub mod query_collection {
     const_enum!(ColGrpResultType, Results, "results");
     #[derive(Serialize)]
     pub(crate) struct CollectionGroupReq {
+        #[serde(rename = "type")]
         pub type_: ColGrpResultType,
         pub limit: u32,
     }
@@ -206,6 +172,7 @@ pub mod query_collection {
         #[serde(rename = "clientType")]
         pub client_type: ClientType,
         pub source: ReqSource,
+        pub collection: ReqCollection,
         #[serde(rename = "collectionView")]
         pub collection_view: ReqCollectionView,
         pub loader: Loader,
@@ -214,7 +181,9 @@ pub mod query_collection {
     #[derive(Deserialize)]
     #[non_exhaustive]
     pub struct CollectionGroupResult {
+        #[serde(rename = "hasMore")]
         pub has_more: bool,
+        #[serde(rename = "blockIds")]
         pub block_ids: Vec<Uuid>,
     }
     #[derive(Deserialize)]
@@ -225,7 +194,9 @@ pub mod query_collection {
     #[derive(Deserialize)]
     #[non_exhaustive]
     pub struct RespResult {
-        pub size_hint: u64,
+        #[serde(default)]
+        #[serde(rename = "sizeHint")]
+        pub size_hint: Option<u64>,
         #[serde(rename = "reducerResults")]
         pub reducer_results: ReducerResults,
     }
@@ -239,25 +210,19 @@ pub mod query_collection {
     }
 }
 
-pub mod sync_record_values_space_initial {
+pub mod sync_record_values_main {
     use serde::Serialize;
     use uuid::Uuid;
 
     use crate::model::TableType;
 
-    pub(crate) const VERSION: u8 = 3;
-
-    #[derive(Serialize)]
-    pub(crate) struct Pointer {
-        pub id: Uuid,
-        pub space_id: Uuid,
-        pub table: TableType,
-    }
+    pub(crate) const VERSION: i8 = -1;
 
     #[derive(Serialize)]
     pub(crate) struct Req {
-        pub version: u8,
-        pub pointer: Pointer,
+        pub version: i8,
+        pub id: Uuid,
+        pub table: TableType,
     }
 
     #[derive(Serialize)]
@@ -265,7 +230,12 @@ pub mod sync_record_values_space_initial {
         pub requests: &'a [R],
     }
 
-    pub type Response = super::RecordMap;
+    #[derive(serde::Deserialize)]
+    #[non_exhaustive]
+    pub struct Response {
+        #[serde(rename = "recordMap")]
+        pub record_map: super::RecordMap,
+    }
 }
 
 pub mod get_signed_file_urls {

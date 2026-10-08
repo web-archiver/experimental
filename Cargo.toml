@@ -22,7 +22,9 @@ members = [
 license = "AGPL-3.0-only"
 
 [workspace.dependencies]
-rustix = { version = "1.1.4", features = ["fs"] }
+# FIXME: use other fork implementation
+# rustix 1.1.5 mangles runtime module
+rustix = { version = "=1.1.4", features = ["fs"] }
 uuid = { version = "1.8.0", features = ["serde"] }
 phf = { version = "0.11.2", features = ["macros"] }
 hex-literal = "1.1.0"

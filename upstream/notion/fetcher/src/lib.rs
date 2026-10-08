@@ -14,7 +14,7 @@ pub enum UnofficalApiV3Data<Resp, Resps> {
         collection_view: Uuid,
         response: Resp,
     },
-    SyncRecordsSpaceInitial {
+    SyncRecordValuesMain {
         responses: Resps,
     },
 }
@@ -24,6 +24,12 @@ pub enum UnofficalApiV3Data<Resp, Resps> {
 pub enum ObjectData<Resp, Resps> {
     UnofficalApiV3(UnofficalApiV3Data<Resp, Resps>),
 }
+
+pub const PACKAGE: webar_core::object::Package<&'static str> = webar_core::object::Package {
+    id: uuid::uuid!("94149415-758f-4628-92df-d4be1d85396b"),
+    name: "webar.upstream.notion",
+    version: webar_core::object::Version(1, 0),
+};
 
 pub mod client;
 pub mod fetcher;

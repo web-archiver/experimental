@@ -1,9 +1,12 @@
 use serde::Deserialize;
 use uuid::Uuid;
 
-use crate::model::rich_text::{IgnoredStr, RichText};
+use crate::model::{
+    AutomationId, CopiedFromPointer, FileId, OtherId, SpaceId, UserId,
+    rich_text::{IgnoredStr, RichText},
+};
 
-use super::{EnumVal, TableType};
+use super::{EnumVal, Pointer, TableType};
 
 #[derive(Default)]
 pub(crate) enum MaybeRichText {
@@ -23,14 +26,6 @@ impl<'de> serde::de::Deserialize<'de> for MaybeRichText {
     }
 }
 
-#[derive(Deserialize)]
-pub(crate) struct Pointer {
-    pub id: Uuid,
-    #[serde(rename = "spaceId")]
-    pub space_id: Uuid,
-    pub table: EnumVal<TableType>,
-}
-
 mk_enum_tag!(
     #[non_exhaustive]
     pub enum BlockType {
@@ -47,6 +42,7 @@ mk_enum_tag!(
         Column = "column",
         ColumnList = "column_list",
         Divider = "divider",
+        Drive = "drive",
         Embed = "embed",
         Equation = "equation",
         Excalidraw = "excalidraw",
@@ -55,7 +51,7 @@ mk_enum_tag!(
         File = "file",
         Gist = "gist",
         Header = "header",
-        Header4 = "header4",
+        Header4 = "header_4",
         Image = "image",
         Maps = "maps",
         Miro = "miro",
@@ -68,13 +64,13 @@ mk_enum_tag!(
         SubHeader = "sub_header",
         SubSubHeader = "sub_sub_header",
         SyncBlock = "transclusion_container",
-        SyncPointer = "transculsion_reference",
+        SyncPointer = "transclusion_reference",
         Tab = "tab",
         Table = "table",
         TableOfContents = "table_of_contents",
         TableRow = "table_row",
         Text = "text",
-        Todo = "todo",
+        Todo = "to_do",
         Toggle = "toggle",
         Tweet = "tweet",
         Typeform = "typeform",
@@ -139,6 +135,22 @@ impl<'de> Deserialize<'de> for Properties {
 }
 
 #[derive(Deserialize)]
+pub(crate) struct Permission {
+    #[serde(default)]
+    pub(crate) user_id: Option<UserId>,
+    #[serde(default)]
+    pub(crate) bot_id: Option<OtherId>,
+    #[serde(default)]
+    pub(crate) parent_id: Option<Uuid>,
+    #[serde(default)]
+    pub(crate) parent_table: Option<EnumVal<TableType>>,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(transparent)]
+pub(crate) struct Permissions(pub(crate) Vec<Permission>);
+
+#[derive(Deserialize)]
 #[non_exhaustive]
 pub struct BlockBase {
     pub id: Uuid,
@@ -147,7 +159,11 @@ pub struct BlockBase {
     #[serde(default)]
     pub(crate) properties: Properties,
     #[serde(default)]
-    pub(crate) space_id: Option<Uuid>,
+    pub(crate) space_id: Option<SpaceId>,
+    #[serde(default)]
+    pub(crate) parent_id: Option<Uuid>,
+    #[serde(default)]
+    pub(crate) parent_table: Option<EnumVal<TableType>>,
     //#[serde(default)]
     //pub(crate) format: Option<Format>,
     #[serde(default)]
@@ -159,7 +175,7 @@ pub struct BlockBase {
     #[serde(default)]
     pub(crate) last_edited_by_table: Option<EnumVal<TableType>>,
     #[serde(default)]
-    pub(crate) file_ids: Vec<Uuid>,
+    pub(crate) file_ids: Vec<FileId>,
     #[serde(default)]
     pub(crate) copied_from: Option<Uuid>,
     #[serde(default)]
@@ -169,34 +185,52 @@ pub struct BlockBase {
 #[derive(Deserialize)]
 pub struct PageFormat {
     #[serde(default)]
+    pub(crate) site_id: Option<OtherId>,
+    #[serde(default)]
     pub(crate) page_cover: Option<String>,
     #[serde(default)]
     pub(crate) page_icon: Option<String>,
+    #[serde(default)]
+    pub(crate) copied_from_pointer: Option<CopiedFromPointer>,
 }
 
 #[derive(Deserialize)]
 pub struct CollectionViewFormat {
     #[serde(default)]
+    pub(crate) site_id: Option<OtherId>,
+    #[serde(default)]
     pub(crate) collection_pointer: Option<Pointer>,
+    #[serde(default)]
+    pub(crate) copied_from_pointer: Option<CopiedFromPointer>,
 }
 
 #[derive(Deserialize)]
 pub struct CollectionViewPageFormat {
+    #[serde(default)]
+    pub(crate) site_id: Option<OtherId>,
     #[serde(default)]
     pub(crate) collection_pointer: Option<Pointer>,
     #[serde(default)]
     pub(crate) page_icon: Option<String>,
     #[serde(default)]
     pub(crate) page_cover: Option<String>,
+    #[serde(default)]
+    pub(crate) copied_from_pointer: Option<CopiedFromPointer>,
 }
 
 #[derive(Deserialize)]
 pub struct TableFormat {
+    #[serde(default)]
+    pub(crate) site_id: Option<OtherId>,
     pub(crate) collection_pointer: Option<Pointer>,
+    #[serde(default)]
+    pub(crate) copied_from_pointer: Option<CopiedFromPointer>,
 }
 
 #[derive(Deserialize)]
 pub struct OtherFormat {
+    #[serde(default)]
+    pub(crate) site_id: Option<OtherId>,
     #[serde(default)]
     pub(crate) transclusion_reference_pointer: Option<Pointer>,
     #[serde(default)]
@@ -210,9 +244,15 @@ pub struct OtherFormat {
     #[serde(default)]
     pub(crate) bookmark_cover: Option<String>,
     #[serde(default)]
-    pub(crate) automation_id: Option<Uuid>,
+    pub(crate) automation_id: Option<AutomationId>,
     #[serde(default)]
     pub(crate) collection_pointer: Option<Pointer>,
+    #[serde(default)]
+    pub(crate) copied_from_pointer: Option<CopiedFromPointer>,
+    #[serde(default)]
+    pub(crate) external_object_id: Option<OtherId>,
+    #[serde(default)]
+    pub(crate) bot_id: Option<OtherId>,
 }
 
 #[derive(Deserialize)]
@@ -242,6 +282,8 @@ pub enum Block {
         #[serde(flatten)]
         base: BlockBase,
         format: PageFormat,
+        #[serde(default)]
+        permissions: Permissions,
     },
     Table {
         #[serde(flatten)]

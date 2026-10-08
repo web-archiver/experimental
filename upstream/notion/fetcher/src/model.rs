@@ -1,6 +1,6 @@
 use std::marker::PhantomData;
 
-use serde::Deserialize;
+use serde::{Deserialize, de::IgnoredAny};
 use uuid::Uuid;
 
 #[allow(dead_code)]
@@ -90,20 +90,23 @@ mk_enum_tag!(
     #[derive(valuable::Valuable)]
     #[non_exhaustive]
     pub enum TableType {
+        Activity = "activity",
+        Automation = "automation",
+        AutomationAction = "automation_action",
         Block = "block",
         Collection = "collection",
-        CollectionView = "colelction_view",
-        NotionUser = "notion_user",
-        UserRoot = "user_root",
-        UserSettings = "user_settings",
-        Space = "space",
-        SpaceView = "space_view",
-        Activity = "activity",
-        Snapshot = "snapshot",
-        Follow = "follow",
-        SlackIntegration = "slack_integration",
+        CollectionView = "collection_view",
         Comment = "comment",
         Discussion = "discussion",
+        Follow = "follow",
+        NotionUser = "notion_user",
+        SlackIntegration = "slack_integration",
+        Snapshot = "snapshot",
+        Space = "space",
+        SpaceView = "space_view",
+        Team = "team",
+        UserRoot = "user_root",
+        UserSettings = "user_settings",
     }
 );
 impl NamedEnumTag for TableType {
@@ -121,28 +124,127 @@ impl serde::Serialize for TableType {
 impl TableType {
     pub(crate) const KNOWN_TYPES: &[Self] = Self::ALL;
 }
+pub struct VecMap<K, V>(pub Vec<(K, V)>);
+impl<K, V> Default for VecMap<K, V> {
+    fn default() -> Self {
+        Self(Vec::new())
+    }
+}
+impl<'de, K, V> serde::Deserialize<'de> for VecMap<K, V>
+where
+    K: serde::Deserialize<'de>,
+    V: serde::Deserialize<'de>,
+{
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct MapVisitor<K, V>(PhantomData<fn() -> (K, V)>);
+        impl<'de, K, V> serde::de::Visitor<'de> for MapVisitor<K, V>
+        where
+            K: serde::Deserialize<'de>,
+            V: serde::Deserialize<'de>,
+        {
+            type Value = VecMap<K, V>;
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("map")
+            }
+            fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+            where
+                A: serde::de::MapAccess<'de>,
+            {
+                let mut ret = match map.size_hint() {
+                    Some(sz) => Vec::with_capacity(sz),
+                    None => Vec::new(),
+                };
+                while let Some(p) = map.next_entry()? {
+                    ret.push(p);
+                }
+                Ok(VecMap(ret))
+            }
+        }
+        deserializer.deserialize_map(MapVisitor(PhantomData))
+    }
+}
+impl<'a, K, V> IntoIterator for &'a VecMap<K, V> {
+    type Item = &'a (K, V);
+    type IntoIter = std::slice::Iter<'a, (K, V)>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter()
+    }
+}
+impl<K, V> IntoIterator for VecMap<K, V> {
+    type Item = (K, V);
+    type IntoIter = std::vec::IntoIter<(K, V)>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
+    }
+}
+
+macro_rules! uuid_wrapper {
+    ($v:vis struct $n:ident ;) => {
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+        #[serde(transparent)]
+        $v struct $n($v Uuid);
+    };
+}
+
+uuid_wrapper!(
+    pub(crate) struct OtherId;
+);
+uuid_wrapper!(
+    pub(crate) struct FileId;
+);
+uuid_wrapper!(
+    pub(crate) struct UserId;
+);
+uuid_wrapper!(
+    pub struct SpaceId;
+);
+uuid_wrapper!(
+    pub(crate) struct AutomationId;
+);
+
+#[derive(Deserialize)]
+pub(crate) struct Pointer {
+    pub id: Uuid,
+    #[serde(rename = "spaceId")]
+    pub space_id: SpaceId,
+    pub table: EnumVal<TableType>,
+}
+
+/// wrapper of [Pointer], since copied_from_pointer objects are not fetched by
+/// default
+#[derive(Deserialize)]
+#[serde(transparent)]
+pub(crate) struct CopiedFromPointer(pub Pointer);
 
 pub mod block;
 pub mod collect_uuids;
+pub mod collection;
+pub mod collection_view;
 pub mod rich_text;
 
-#[derive(Deserialize)]
-#[non_exhaustive]
-pub struct Collection {
-    pub id: Uuid,
-    pub(crate) name: rich_text::RichText<rich_text::IgnoredStr>,
-    #[serde(default)]
-    pub(crate) parent_id: Option<Uuid>,
-    #[serde(default)]
-    pub(crate) copied_from: Option<Uuid>,
-    #[serde(default)]
-    pub(crate) template_pages: Vec<Uuid>,
+macro_rules! ignored_obj {
+    ($v:vis struct $n:ident ;) => {
+        #[derive(Deserialize)]
+        #[serde(transparent)]
+        $v struct $n($v IgnoredAny);
+    };
 }
 
-#[derive(Deserialize)]
-#[non_exhaustive]
-pub struct CollectionView {
-    pub id: Uuid,
-    #[serde(default)]
-    pub(crate) parent_id: Option<Uuid>,
-}
+ignored_obj!(
+    pub(crate) struct Automation;
+);
+ignored_obj!(
+    pub(crate) struct AutomationAction;
+);
+ignored_obj!(
+    pub(crate) struct Discussion;
+);
+ignored_obj!(
+    pub(crate) struct Space;
+);
+ignored_obj!(
+    pub(crate) struct Team;
+);

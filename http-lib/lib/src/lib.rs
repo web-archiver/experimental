@@ -14,7 +14,7 @@ use webar_core::{
 use webar_http_lib_core::utils::{create_dir, create_file, open_new_dir};
 
 pub mod blob;
-pub mod data_tar;
+pub mod data_writer;
 pub mod http_client;
 pub mod local_id;
 pub mod log;
@@ -47,9 +47,8 @@ struct FetchInfo<'a> {
 pub struct Context<'a> {
     pub runtime: &'a tokio::runtime::Handle,
     pub blob_store: &'a Arc<blob::BlobStore>,
-    pub object_store: &'a mut object_store::MakeStore,
-    pub http_cloent: &'a mut http_client::Client,
-    pub data_tar: &'a mut data_tar::DataTar,
+    pub data_writer: &'a mut data_writer::MakeWriter,
+    pub http_client: &'a mut http_client::Client,
 }
 
 #[derive(Debug)]
@@ -68,7 +67,6 @@ pub struct FetcherArgs<'a> {
 #[non_exhaustive]
 pub struct FetcherConfig<'a> {
     pub shared_blob_index: Option<&'a str>,
-    pub shared_object_index: Option<&'a str>,
     pub cookie_store: Option<http_client::cookie::CookieStore>,
     pub req_per_sec: u32,
 }
@@ -76,7 +74,6 @@ impl Default for FetcherConfig<'_> {
     fn default() -> Self {
         Self {
             shared_blob_index: None,
-            shared_object_index: None,
             cookie_store: None,
             req_per_sec: 32,
         }
@@ -212,8 +209,8 @@ fn run(
         blob::BlobStore::new(root, cfgs.shared_blob_index)
             .context("failed to create blob store")?,
     );
-    let mut object_store = object_store::MakeStore::new(root, cfgs.shared_object_index)
-        .context("failed to create object store factory")?;
+    let mut data_writer =
+        data_writer::MakeWriter::new(root).context("failed to create object store factory")?;
     let id_generator = local_id::IdGenerator::new();
     let mut http_client = http_client::Client::new(
         primary_connector_root,
@@ -246,14 +243,12 @@ fn run(
             })
         })
         .context("invalid utf8 character in uname")?;
-    let mut data_tar = data_tar::DataTar::new(root).context("failed to crate data tar")?;
 
     main(Context {
         runtime: rt.handle(),
         blob_store: &blob_store,
-        object_store: &mut object_store,
-        http_cloent: &mut http_client,
-        data_tar: &mut data_tar,
+        data_writer: &mut data_writer,
+        http_client: &mut http_client,
     })
     .context("fetcher function returns error")?;
 
@@ -275,10 +270,6 @@ fn run(
         }),
     )
     .context("failed to write fetch info")?;
-    data_tar
-        .finish()
-        .context("failed to finish writing data tar")?;
-
     Ok(())
 }
 
@@ -365,7 +356,11 @@ pub fn run_fetcher(
                 return Err(e.context("failed to init tracing"));
             }
 
-            tracing::info!(path = &root_path, "data will be saved to {root_path}");
+            tracing::info!(
+                fetch_id = tracing::field::display(&uuid),
+                path = &root_path,
+                "data will be saved to {root_path}"
+            );
             webar_net_tls_rustls_conn::global_init();
             match run(
                 root.as_fd(),

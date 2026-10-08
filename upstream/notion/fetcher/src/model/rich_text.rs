@@ -5,6 +5,7 @@ use uuid::Uuid;
 
 use super::{EnumVal, NamedEnumTag};
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IgnoredStr {}
 impl<'de> Deserialize<'de> for IgnoredStr {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
@@ -33,6 +34,7 @@ impl<'a> From<&'a str> for IgnoredStr {
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum SubDecoration {
     #[non_exhaustive]
@@ -55,6 +57,8 @@ impl<'de> Deserialize<'de> for SubDecoration {
                 Code = "c",
                 Colored = "h",
                 Commented = "m",
+                Underline = "_",
+                Eoi = "eoi",
             }
         );
         impl NamedEnumTag for Ty {
@@ -77,7 +81,9 @@ impl<'de> Deserialize<'de> for SubDecoration {
                     .ok_or_else(|| serde::de::Error::missing_field("type"))?
                 {
                     EnumVal::Known(ty) => match ty {
-                        Ty::Bold | Ty::Italic | Ty::Strike => Ok(SubDecoration::Other),
+                        Ty::Bold | Ty::Italic | Ty::Strike | Ty::Underline => {
+                            Ok(SubDecoration::Other)
+                        }
                         Ty::Link => {
                             let IgnoredAny = seq
                                 .next_element()?
@@ -97,8 +103,17 @@ impl<'de> Deserialize<'de> for SubDecoration {
                                 .ok_or_else(|| serde::de::Error::missing_field("comment_id"))?;
                             Ok(SubDecoration::Commented { comment_id })
                         }
+                        Ty::Eoi => {
+                            let IgnoredAny = seq.next_element()?.ok_or_else(|| {
+                                serde::de::Error::missing_field("external object id")
+                            })?;
+                            Ok(SubDecoration::Other)
+                        }
                     },
-                    EnumVal::Unknown => Ok(SubDecoration::Other),
+                    EnumVal::Unknown => {
+                        while let Some(IgnoredAny) = seq.next_element()? {}
+                        Ok(SubDecoration::Other)
+                    }
                 }
             }
         }
@@ -106,6 +121,7 @@ impl<'de> Deserialize<'de> for SubDecoration {
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Mention {
     #[non_exhaustive]
@@ -119,6 +135,8 @@ pub enum Mention {
     },
     #[non_exhaustive]
     Date,
+    #[non_exhaustive]
+    Eoi,
     Unknown,
 }
 impl<'de> Deserialize<'de> for Mention {
@@ -131,6 +149,7 @@ impl<'de> Deserialize<'de> for Mention {
                 Page = "p",
                 User = "u",
                 Date = "d",
+                Eoi = "eoi",
             }
         );
         impl NamedEnumTag for Ty {
@@ -172,6 +191,12 @@ impl<'de> Deserialize<'de> for Mention {
                             seq.next_element::<serde::de::IgnoredAny>()?;
                             Ok(Mention::Date)
                         }
+                        Ty::Eoi => {
+                            seq.next_element::<IgnoredAny>()?.ok_or_else(|| {
+                                serde::de::Error::missing_field("external_object_id")
+                            })?;
+                            Ok(Mention::Eoi)
+                        }
                     },
                     EnumVal::Unknown => {
                         seq.next_element::<serde::de::IgnoredAny>()?;
@@ -184,6 +209,7 @@ impl<'de> Deserialize<'de> for Mention {
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum TextSpan<T> {
     #[non_exhaustive]

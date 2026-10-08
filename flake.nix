@@ -13,6 +13,7 @@
           default = pkgs.mkShell {
             packages = [
               pkgs.sqlite
+              pkgs.slirp4netns
             ];
           };
         };

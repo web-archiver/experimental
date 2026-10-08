@@ -1,18 +1,19 @@
 use std::{
-    collections::{HashMap, VecDeque, hash_map},
-    fmt::Write as _,
+    collections::{HashMap, HashSet, VecDeque, hash_map},
+    ffi::CStr,
+    fmt::{Debug, Write as _},
 };
 
-use serde::Serialize;
-use uuid::Uuid;
+use anyhow::Context;
+use serde::{Serialize, de::IgnoredAny};
+use uuid::{Uuid, uuid};
 
-use webar_core::codec::gcbor::ToGCbor;
 use webar_http_lib::http_client::MessageInfo;
 
 use crate::{
     client::RecordPointer,
     model::{
-        TableType,
+        AutomationId, EnumVal, FileId, OtherId, SpaceId, TableType, UserId,
         block::BlockBase,
         rich_text::{RichText, TextSpan},
     },
@@ -21,6 +22,7 @@ use crate::{
 };
 
 #[derive(Debug, Clone, Copy, Serialize, valuable::Valuable)]
+#[serde(rename_all = "snake_case")]
 enum ObjectType {
     Record(TableType),
     Page,
@@ -28,12 +30,21 @@ enum ObjectType {
     /// other object (e.g. session id)
     Other,
 }
+impl ObjectType {
+    fn from_table(t: EnumVal<TableType>) -> Option<Self> {
+        t.into_known().map(Self::Record)
+    }
+    fn from_table_opt(v: Option<EnumVal<TableType>>) -> Option<Self> {
+        v.and_then(Self::from_table)
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, valuable::Valuable)]
+#[serde(rename_all = "snake_case")]
 enum VisitStatus {
     Unknown,
     Ignored,
-    /// missing information
+    /// should be fetched but missing information
     Blocked,
     Queued,
     /// fetching started but may not received data
@@ -49,39 +60,35 @@ impl VisitStatus {
             Self::Unknown
         }
     }
-    fn with_should_fetch(self, should_fetch: bool) -> Self {
+    fn with_should_fetch(self, should_fetch: Option<bool>) -> Self {
         match self {
             Self::Blocked | Self::Queued | Self::Fetching | Self::Fetched | Self::Failed => self,
-            Self::Unknown | Self::Ignored => {
-                if should_fetch {
-                    Self::Blocked
-                } else {
-                    Self::Ignored
-                }
-            }
+            Self::Ignored => match should_fetch {
+                Some(true) => Self::Blocked,
+                Some(false) | None => Self::Ignored,
+            },
+            Self::Unknown => match should_fetch {
+                Some(true) => Self::Blocked,
+                Some(false) => Self::Ignored,
+                None => Self::Unknown,
+            },
         }
     }
     fn is_fetched(self) -> bool {
         matches!(self, Self::Fetched)
     }
+    fn is_final(self) -> bool {
+        matches!(self, Self::Ignored | Self::Fetched)
+    }
     fn on_enqueue(&mut self, ops: impl FnOnce()) {
         match self {
-            Self::Unknown => {
-                ops();
-                *self = Self::Queued;
-            }
-            Self::Blocked => {
+            Self::Unknown | Self::Blocked | Self::Fetching | Self::Ignored => {
                 ops();
                 *self = Self::Queued;
             }
             Self::Queued => (),
-            Self::Fetching => (),
             Self::Fetched => (),
             Self::Failed => (),
-            Self::Ignored => {
-                ops();
-                *self = Self::Queued;
-            }
         }
     }
     fn on_blocked(&mut self) {
@@ -91,25 +98,24 @@ impl VisitStatus {
             Self::Fetching => (),
             Self::Fetched => (),
             Self::Failed => (),
-            Self::Unknown => {
-                *self = Self::Blocked;
-            }
-            Self::Ignored => {
-                *self = Self::Blocked;
-            }
+            Self::Ignored | Self::Unknown => *self = Self::Blocked,
         }
     }
     fn on_ignored(&mut self) {
         match self {
-            Self::Unknown => {
-                *self = Self::Ignored;
-            }
+            Self::Unknown => *self = Self::Ignored,
             Self::Ignored
             | Self::Blocked
             | Self::Queued
             | Self::Fetching
             | Self::Fetched
             | Self::Failed => (),
+        }
+    }
+    fn on_disallowed(&mut self) {
+        match self {
+            Self::Unknown | Self::Blocked => *self = Self::Ignored,
+            Self::Ignored | Self::Queued | Self::Fetching | Self::Fetched | Self::Failed => (),
         }
     }
 }
@@ -177,6 +183,7 @@ macro_rules! set_fn {
 }
 
 #[derive(Debug, Serialize, valuable::Valuable)]
+#[serde(rename_all = "snake_case")]
 enum ObjectInfo {
     Unknown { space_id: Option<UuidVal> },
     Record(RecordInfo),
@@ -203,8 +210,9 @@ impl ObjectInfo {
 }
 
 #[derive(Debug, Serialize, valuable::Valuable)]
+#[serde(rename_all = "snake_case")]
 enum ObjectState {
-    Unknown { should_fetch: bool },
+    Unknown { should_fetch: Option<bool> },
     Record(RecordState),
     CollectionView(CollectionViewState),
     Page(PageState),
@@ -216,6 +224,22 @@ impl ObjectState {
     set_fn!(set_page, Page, PageState);
     set_fn!(set_collection_view, CollectionView, CollectionViewState);
     set_fn!(set_file, File, FileState);
+    fn is_final(&self) -> bool {
+        match self {
+            Self::Unknown { should_fetch } => matches!(should_fetch, Some(false)),
+            Self::Record(RecordState {
+                status: RecordStatus { fetched },
+            }) => fetched.is_final(),
+            Self::CollectionView(CollectionViewState {
+                status: CollectionViewStatus { info, data },
+            }) => info.is_final() && data.is_final(),
+            Self::Page(PageState {
+                status: PageStatus { content },
+            }) => content.is_final(),
+            Self::File(FileState {}) => true,
+            Self::Other => true,
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -233,10 +257,10 @@ struct QueryCollection {
     collection_view_id: Uuid,
     space_id: Uuid,
 }
+
 #[derive(Debug)]
 struct GetRecord {
     id: Uuid,
-    space_id: Uuid,
     table: TableType,
 }
 
@@ -244,21 +268,35 @@ struct OpsQueue {
     get_page: VecDeque<GetPage>,
     query_collection: VecDeque<QueryCollection>,
     get_record: Vec<GetRecord>,
+    /// double buffer for [GetRecord] requests
+    fetch_record: Vec<GetRecord>,
 }
 impl OpsQueue {
     fn is_empty(&self) -> bool {
-        self.get_page.is_empty() && self.query_collection.is_empty() && self.get_record.is_empty()
+        self.get_page.is_empty()
+            && self.query_collection.is_empty()
+            && self.get_record.is_empty()
+            && self.fetch_record.is_empty()
     }
 }
 
 #[derive(Debug, Serialize)]
-struct VisitConfig {
+struct VisitConfig<'a> {
     recurse_page: bool,
     fetch_mention_page: bool,
+    follow_copied_from: bool,
+    follow_parent: bool,
+    allowed_spaces: &'a HashSet<Uuid>,
 }
+impl<'a> VisitConfig<'a> {
+    fn is_space_allowed(&self, space_id: Option<SpaceId>) -> bool {
+        space_id.is_none_or(|id| self.allowed_spaces.contains(&id.0))
+    }
+}
+
 #[derive(Serialize)]
-struct VisitState {
-    config: VisitConfig,
+struct VisitState<'a> {
+    config: VisitConfig<'a>,
     objects: HashMap<UuidVal, ObjectState>,
     #[serde(skip)]
     queue: OpsQueue,
@@ -266,7 +304,7 @@ struct VisitState {
 #[derive(Serialize)]
 struct DebugOutput<'a> {
     global_info: &'a GlobalInfo,
-    visit_state: &'a VisitState,
+    visit_state: &'a VisitState<'a>,
 }
 
 trait ApiResp {
@@ -279,6 +317,30 @@ impl<T: ApiResp> ApiResp for Option<T> {
     fn on_fetched(&self, id: Self::Id, global_info: &mut GlobalInfo, state: &mut VisitState) {
         if let Some(t) = self {
             T::on_fetched(t, id, global_info, state);
+        }
+    }
+}
+
+trait ObjectId<A> {
+    fn add_pending(
+        &self,
+        global_info: &mut GlobalInfo,
+        state: &mut VisitState,
+        args: A,
+        do_fetch: bool,
+    );
+}
+impl<A, T: ObjectId<A>> ObjectId<A> for Option<T> {
+    #[inline]
+    fn add_pending(
+        &self,
+        global_info: &mut GlobalInfo,
+        state: &mut VisitState,
+        args: A,
+        do_fetch: bool,
+    ) {
+        if let Some(i) = self {
+            i.add_pending(global_info, state, args, do_fetch);
         }
     }
 }
@@ -300,11 +362,35 @@ fn merge_space_id(old_id: Option<UuidVal>, new_id: Option<UuidVal>) -> Option<Uu
         (None, None) => None,
     }
 }
+fn merge_space_uuid(id0: Option<SpaceId>, id1: Option<SpaceId>) -> Option<SpaceId> {
+    match (id0, id1) {
+        (Some(uuid0), Some(uuid1)) => {
+            if uuid0 != uuid1 {
+                tracing::warn!(
+                    id0 = tracing::field::valuable(&UuidVal(uuid0.0)),
+                    id1 = tracing::field::valuable(&UuidVal(uuid1.0)),
+                    "inconsistent space id"
+                );
+            }
+            id0
+        }
+        (Some(_), None) => id0,
+        (None, Some(_)) => id1,
+        (None, None) => None,
+    }
+}
 
-type AddObjResult<'a, I, S> = Result<(&'a mut OpsQueue, &'a mut I, &'a mut S), Option<ObjectType>>;
+struct AddedObj<'a, 'c, I, S> {
+    config: &'a VisitConfig<'c>,
+    ops_queue: &'a mut OpsQueue,
+    info: &'a mut I,
+    state: &'a mut S,
+}
 
-impl VisitState {
-    fn new(config: VisitConfig, queue: OpsQueue) -> Self {
+type AddObjResult<'a, 'c, I, S> = Result<AddedObj<'a, 'c, I, S>, Option<ObjectType>>;
+
+impl<'c> VisitState<'c> {
+    fn new(config: VisitConfig<'c>, queue: OpsQueue) -> Self {
         Self {
             config,
             objects: HashMap::new(),
@@ -315,11 +401,11 @@ impl VisitState {
         &'a mut self,
         global_info: &'a mut GlobalInfo,
         id: Uuid,
-        space_id: Option<Uuid>,
+        space_id: Option<SpaceId>,
         ty: TableType,
-    ) -> AddObjResult<'a, RecordInfo, RecordState> {
+    ) -> AddObjResult<'a, 'c, RecordInfo, RecordState> {
         let id = UuidVal(id);
-        let space_id = space_id.map(UuidVal);
+        let space_id = space_id.map(|v| UuidVal(v.0));
         let _span = tracing::info_span!(
             "add_obj_record",
             id = tracing::field::valuable(&id),
@@ -419,61 +505,78 @@ impl VisitState {
                 r
             }
         };
-        Ok((&mut self.queue, info, state))
+        Ok(AddedObj {
+            config: &self.config,
+            ops_queue: &mut self.queue,
+            info,
+            state,
+        })
     }
     fn add_pending_record(
         &mut self,
         global_info: &mut GlobalInfo,
         id: Uuid,
-        space_id: Option<Uuid>,
+        space_id: Option<SpaceId>,
         ty: TableType,
         do_fetch: bool,
     ) {
-        let (ops_queue, info, state) = match self.add_obj_record(global_info, id, space_id, ty) {
+        let r = match self.add_obj_record(global_info, id, space_id, ty) {
             Ok(r) => r,
             Err(ty) => return self.add_pending_object(global_info, id, space_id, ty, do_fetch),
         };
-        match info.ty {
+        match r.info.ty {
             TableType::Block | TableType::Collection | TableType::CollectionView => {
                 if do_fetch {
-                    match info.space_id {
-                        Some(UuidVal(space_id)) => {
-                            state.status.fetched.on_enqueue(|| {
-                                ops_queue.get_record.push(GetRecord {
-                                    id,
-                                    space_id,
-                                    table: info.ty,
-                                })
-                            });
-                        }
-                        None => {
-                            state.status.fetched.on_blocked();
-                        }
+                    if r.config.is_space_allowed(space_id) {
+                        r.state.status.fetched.on_enqueue(|| {
+                            r.ops_queue.get_record.push(GetRecord {
+                                id,
+                                table: r.info.ty,
+                            })
+                        });
+                    } else {
+                        r.state.status.fetched.on_disallowed();
                     }
                 } else {
-                    state.status.fetched.on_ignored();
+                    r.state.status.fetched.on_ignored();
                 }
             }
-            TableType::Space
-            | TableType::Follow
-            | TableType::Comment
-            | TableType::UserRoot
+            TableType::Automation
             | TableType::Activity
-            | TableType::Snapshot
-            | TableType::SpaceView
-            | TableType::NotionUser
+            | TableType::AutomationAction
+            | TableType::Comment
             | TableType::Discussion
-            | TableType::UserSettings
-            | TableType::SlackIntegration => {
-                state.status.fetched.on_ignored();
+            | TableType::Follow
+            | TableType::NotionUser
+            | TableType::SlackIntegration
+            | TableType::Snapshot
+            | TableType::Space
+            | TableType::SpaceView
+            | TableType::Team
+            | TableType::UserRoot
+            | TableType::UserSettings => {
+                r.state.status.fetched.on_ignored();
             }
+        }
+    }
+    #[inline]
+    fn add_pending_record_opt(
+        &mut self,
+        global_info: &mut GlobalInfo,
+        id: Option<Uuid>,
+        space_id: Option<SpaceId>,
+        ty: TableType,
+        do_fetch: bool,
+    ) {
+        if let Some(i) = id {
+            self.add_pending_record(global_info, i, space_id, ty, do_fetch);
         }
     }
     fn add_obj_page<'a>(
         &'a mut self,
         global_info: &'a mut GlobalInfo,
         id: Uuid,
-    ) -> AddObjResult<'a, PageInfo, PageState> {
+    ) -> AddObjResult<'a, 'c, PageInfo, PageState> {
         let id = UuidVal(id);
         let _span =
             tracing::info_span!("add_obj_page", id = tracing::field::valuable(&id)).entered();
@@ -544,32 +647,37 @@ impl VisitState {
                 r
             }
         };
-        Ok((&mut self.queue, info, state))
+        Ok(AddedObj {
+            config: &self.config,
+            ops_queue: &mut self.queue,
+            info,
+            state,
+        })
     }
     fn add_pending_page(&mut self, global_info: &mut GlobalInfo, id: Uuid, do_fetch: bool) {
-        let (queue, _, state) = match self.add_obj_page(global_info, id) {
+        let r = match self.add_obj_page(global_info, id) {
             Ok(r) => r,
             Err(Some(ObjectType::Page)) => return,
             Err(ty) => return self.add_pending_object(global_info, id, None, ty, do_fetch),
         };
         if do_fetch {
-            state
+            r.state
                 .status
                 .content
-                .on_enqueue(|| queue.get_page.push_back(GetPage { page_id: id }));
+                .on_enqueue(|| r.ops_queue.get_page.push_back(GetPage { page_id: id }));
         } else {
-            state.status.content.on_ignored();
+            r.state.status.content.on_ignored();
         }
     }
     fn add_obj_collection_view<'a>(
         &'a mut self,
         global_info: &'a mut GlobalInfo,
         id: Uuid,
-        space_id: Option<Uuid>,
+        space_id: Option<SpaceId>,
         collection_id: Option<Uuid>,
-    ) -> AddObjResult<'a, CollectionViewInfo, CollectionViewState> {
+    ) -> AddObjResult<'a, 'c, CollectionViewInfo, CollectionViewState> {
         let id = UuidVal(id);
-        let space_id = space_id.map(UuidVal);
+        let space_id = space_id.map(|v| UuidVal(v.0));
         let collection_id = collection_id.map(UuidVal);
         let _span = tracing::info_span!(
             "add_obj_collection_view",
@@ -700,55 +808,101 @@ impl VisitState {
                 r
             }
         };
-        Ok((&mut self.queue, info, state))
+        Ok(AddedObj {
+            config: &self.config,
+            ops_queue: &mut self.queue,
+            info,
+            state,
+        })
     }
-    fn add_pending_collection_view(
-        &mut self,
-        global_info: &mut GlobalInfo,
+    fn add_pending_collection_view<'a>(
+        &'a mut self,
+        global_info: &'a mut GlobalInfo,
         id: Uuid,
-        space_id: Option<Uuid>,
+        space_id: Option<SpaceId>,
         collection_id: Option<Uuid>,
         do_fetch: bool,
     ) {
-        let (queue, info, state) =
-            match self.add_obj_collection_view(global_info, id, space_id, collection_id) {
-                Ok(r) => r,
-                Err(Some(ObjectType::Record(TableType::CollectionView))) => return,
-                Err(ty) => return self.add_pending_object(global_info, id, space_id, ty, do_fetch),
-            };
+        let r = match self.add_obj_collection_view(global_info, id, space_id, collection_id) {
+            Ok(r) => r,
+            Err(Some(ObjectType::Record(TableType::CollectionView))) => return,
+            Err(ty) => return self.add_pending_object(global_info, id, space_id, ty, do_fetch),
+        };
         if do_fetch {
-            match (info.space_id, info.collection_id) {
-                (Some(UuidVal(space_id)), Some(UuidVal(collection_id))) => {
-                    state.status.info.on_enqueue(|| {
-                        queue.get_record.push(GetRecord {
-                            id,
-                            space_id,
-                            table: TableType::CollectionView,
-                        })
-                    });
-                    state.status.data.on_enqueue(|| {
-                        queue.query_collection.push_back(QueryCollection {
-                            collection_id,
-                            collection_view_id: id,
-                            space_id,
-                        })
-                    });
+            if r.config.is_space_allowed(space_id) {
+                r.state.status.info.on_enqueue(|| {
+                    r.ops_queue.get_record.push(GetRecord {
+                        id,
+                        table: TableType::CollectionView,
+                    })
+                });
+                match (r.info.space_id, r.info.collection_id) {
+                    (Some(UuidVal(space_id)), Some(UuidVal(collection_id))) => {
+                        r.state.status.data.on_enqueue(|| {
+                            r.ops_queue.query_collection.push_back(QueryCollection {
+                                collection_id,
+                                collection_view_id: id,
+                                space_id,
+                            })
+                        });
+                    }
+                    _ => {
+                        r.state.status.data.on_blocked();
+                    }
                 }
-                _ => {
-                    state.status.info.on_blocked();
-                    state.status.data.on_blocked();
-                }
+            } else {
+                r.state.status.info.on_disallowed();
+                r.state.status.data.on_disallowed();
             }
         } else {
-            state.status.info.on_ignored();
-            state.status.data.on_ignored();
+            r.state.status.info.on_ignored();
+            r.state.status.data.on_ignored();
+        }
+    }
+    fn add_fetched_collection_view(
+        &mut self,
+        global_info: &mut GlobalInfo,
+        id: Uuid,
+        space_id: Option<SpaceId>,
+        collection_id: Option<Uuid>,
+        do_fetch: bool,
+    ) {
+        let Ok(r) = self.add_obj_collection_view(global_info, id, space_id, collection_id) else {
+            return;
+        };
+        r.info.status.info = true;
+        r.state.status.info = VisitStatus::Fetched;
+        if do_fetch {
+            if r.info
+                .space_id
+                .is_none_or(|v| r.config.allowed_spaces.contains(&v.0))
+            {
+                match (r.info.space_id, r.info.collection_id) {
+                    (Some(UuidVal(space_id)), Some(UuidVal(collection_id))) => {
+                        r.state.status.data.on_enqueue(|| {
+                            r.ops_queue.query_collection.push_back(QueryCollection {
+                                collection_id,
+                                collection_view_id: id,
+                                space_id,
+                            });
+                        });
+                    }
+                    _ => {
+                        r.state.status.data.on_blocked();
+                    }
+                }
+            } else {
+                r.state.status.data.on_disallowed();
+            }
+        } else {
+            r.state.status.data.on_ignored();
         }
     }
     fn add_obj_file<'a>(
         &'a mut self,
         global_info: &'a mut GlobalInfo,
         id: Uuid,
-    ) -> AddObjResult<'a, FileInfo, FileState> {
+    ) -> AddObjResult<'a, 'c, FileInfo, FileState> {
         let id = UuidVal(id);
         let _span =
             tracing::info_span!("add_obj_file", id = tracing::field::valuable(&id)).entered();
@@ -797,7 +951,12 @@ impl VisitState {
                 r
             }
         };
-        Ok((&mut self.queue, info, state))
+        Ok(AddedObj {
+            config: &self.config,
+            ops_queue: &mut self.queue,
+            info,
+            state,
+        })
     }
     fn add_pending_file(&mut self, global_info: &mut GlobalInfo, id: Uuid, do_fetch: bool) {
         match self.add_obj_file(global_info, id) {
@@ -851,37 +1010,48 @@ impl VisitState {
         &mut self,
         global_info: &mut GlobalInfo,
         id: Uuid,
-        space_id: Option<Uuid>,
-        do_fetch: bool,
+        space_id: Option<SpaceId>,
+        do_fetch: Option<bool>,
     ) {
         let id_v = UuidVal(id);
         let _span =
-            tracing::info_span!("add_obj_unknown", id = tracing::field::valuable(&id_v)).entered();
+            tracing::info_span!("add_pending_unknown", id = tracing::field::valuable(&id_v))
+                .entered();
         match global_info.objects.entry(id_v) {
             hash_map::Entry::Occupied(o) => match o.into_mut() {
                 ObjectInfo::Record(RecordInfo { ty, .. }) => {
-                    let ty = *ty;
-                    return self.add_pending_record(global_info, id, space_id, ty, do_fetch);
+                    if let Some(do_fetch) = do_fetch {
+                        let ty = *ty;
+                        self.add_pending_record(global_info, id, space_id, ty, do_fetch);
+                    }
+                    return;
                 }
                 ObjectInfo::CollectionView(_) => {
-                    return self.add_pending_collection_view(
-                        global_info,
-                        id,
-                        space_id,
-                        None,
-                        do_fetch,
-                    );
+                    if let Some(do_fetch) = do_fetch {
+                        self.add_pending_collection_view(global_info, id, space_id, None, do_fetch);
+                    }
+                    return;
                 }
-                ObjectInfo::Page(_) => return self.add_pending_page(global_info, id, do_fetch),
-                ObjectInfo::File(_) => todo!(),
+                ObjectInfo::Page(_) => {
+                    if let Some(do_fetch) = do_fetch {
+                        self.add_pending_page(global_info, id, do_fetch);
+                    }
+                    return;
+                }
+                ObjectInfo::File(_) => {
+                    if let Some(do_fetch) = do_fetch {
+                        self.add_pending_file(global_info, id, do_fetch);
+                    }
+                    return;
+                }
                 ObjectInfo::Other => (),
                 ObjectInfo::Unknown { space_id: sid } => {
-                    *sid = merge_space_id(*sid, space_id.map(UuidVal));
+                    *sid = merge_space_id(*sid, space_id.map(|v| UuidVal(v.0)));
                 }
             },
             hash_map::Entry::Vacant(v) => {
                 v.insert(ObjectInfo::Unknown {
-                    space_id: space_id.map(UuidVal),
+                    space_id: space_id.map(|v| UuidVal(v.0)),
                 });
             }
         }
@@ -893,7 +1063,12 @@ impl VisitState {
                 | ObjectState::File(_)
                 | ObjectState::Other => (),
                 ObjectState::Unknown { should_fetch: f } => {
-                    *f |= do_fetch;
+                    *f = match (do_fetch, *f) {
+                        (Some(f0), Some(f1)) => Some(f0 | f1),
+                        (Some(_), None) => do_fetch,
+                        (None, Some(_)) => *f,
+                        (None, None) => None,
+                    };
                 }
             },
             hash_map::Entry::Vacant(v) => {
@@ -907,7 +1082,7 @@ impl VisitState {
         &mut self,
         global_info: &mut GlobalInfo,
         id: Uuid,
-        space_id: Option<Uuid>,
+        space_id: Option<SpaceId>,
         ty: Option<ObjectType>,
         do_fetch: bool,
     ) {
@@ -923,15 +1098,33 @@ impl VisitState {
                 ObjectType::File => self.add_pending_file(global_info, id, do_fetch),
                 ObjectType::Other => self.add_obj_other(global_info, id),
             },
-            None => self.add_pending_unknown(global_info, id, space_id, do_fetch),
+            None => self.add_pending_unknown(global_info, id, space_id, Some(do_fetch)),
         }
+    }
+    fn add_pending_obj_with_table_opt(
+        &mut self,
+        global_info: &mut GlobalInfo,
+        id: Option<Uuid>,
+        ty: Option<EnumVal<TableType>>,
+        do_fetch: bool,
+    ) {
+        let Some(id) = id else {
+            return;
+        };
+        self.add_pending_object(
+            global_info,
+            id,
+            None,
+            ObjectType::from_table_opt(ty),
+            do_fetch,
+        );
     }
 
     fn add_fetched_record(
         &mut self,
         global_info: &mut GlobalInfo,
         id: Uuid,
-        space_id: Option<Uuid>,
+        space_id: Option<SpaceId>,
         ty: TableType,
     ) {
         let _span = tracing::info_span!(
@@ -942,21 +1135,18 @@ impl VisitState {
         .entered();
         match ty {
             TableType::CollectionView => {
-                let Ok((_, info, state)) =
-                    self.add_obj_collection_view(global_info, id, space_id, None)
-                else {
+                let Ok(r) = self.add_obj_collection_view(global_info, id, space_id, None) else {
                     return;
                 };
-                info.status.info = true;
-                state.status.info = VisitStatus::Fetched;
+                r.info.status.info = true;
+                r.state.status.info = VisitStatus::Fetched;
             }
             _ => {
-                let Ok((_, info, state)) = self.add_obj_record(global_info, id, space_id, ty)
-                else {
+                let Ok(r) = self.add_obj_record(global_info, id, space_id, ty) else {
                     return;
                 };
-                info.status.fetched = true;
-                state.status.fetched = VisitStatus::Fetched;
+                r.info.status.fetched = true;
+                r.state.status.fetched = VisitStatus::Fetched;
             }
         }
     }
@@ -966,10 +1156,76 @@ impl VisitState {
             return;
         };
         for u in uuids.iter().copied() {
-            self.add_pending_unknown(global_info, u, None, true);
+            self.add_pending_unknown(global_info, u, None, None);
         }
     }
 }
+
+impl ObjectId<()> for AutomationId {
+    fn add_pending(
+        &self,
+        global_info: &mut GlobalInfo,
+        state: &mut VisitState,
+        _: (),
+        do_fetch: bool,
+    ) {
+        state.add_pending_record(global_info, self.0, None, TableType::Automation, do_fetch);
+    }
+}
+impl ObjectId<()> for SpaceId {
+    fn add_pending(
+        &self,
+        global_info: &mut GlobalInfo,
+        state: &mut VisitState,
+        _: (),
+        do_fetch: bool,
+    ) {
+        state.add_pending_record(global_info, self.0, None, TableType::Space, do_fetch);
+    }
+}
+impl ObjectId<()> for FileId {
+    fn add_pending(
+        &self,
+        global_info: &mut GlobalInfo,
+        state: &mut VisitState,
+        _: (),
+        do_fetch: bool,
+    ) {
+        state.add_pending_file(global_info, self.0, do_fetch);
+    }
+}
+impl ObjectId<()> for UserId {
+    fn add_pending(
+        &self,
+        global_info: &mut GlobalInfo,
+        state: &mut VisitState,
+        (): (),
+        do_fetch: bool,
+    ) {
+        state.add_pending_record(global_info, self.0, None, TableType::NotionUser, do_fetch);
+    }
+}
+trait OtherObjId {
+    fn add_ignored(&self, global_info: &mut GlobalInfo, state: &mut VisitState);
+}
+impl OtherObjId for OtherId {
+    fn add_ignored(&self, global_info: &mut GlobalInfo, state: &mut VisitState) {
+        state.add_obj_other(global_info, self.0);
+    }
+}
+impl<T: OtherObjId> OtherObjId for Option<T> {
+    fn add_ignored(&self, global_info: &mut GlobalInfo, state: &mut VisitState) {
+        if let Some(i) = self {
+            i.add_ignored(global_info, state);
+        }
+    }
+}
+
+struct RecordPtr {
+    id: Uuid,
+    space_id: Option<SpaceId>,
+}
+
 impl<T> ApiResp for TextSpan<T> {
     type Id = ();
     fn on_fetched(&self, _: Self::Id, global_info: &mut GlobalInfo, state: &mut VisitState) {
@@ -996,6 +1252,7 @@ impl<T> ApiResp for TextSpan<T> {
                     state.add_pending_page(global_info, *page_id, state.config.fetch_mention_page);
                 }
                 crate::model::rich_text::Mention::Date => (),
+                crate::model::rich_text::Mention::Eoi => (),
                 crate::model::rich_text::Mention::Unknown => (),
             },
             TextSpan::Unknown => (),
@@ -1034,61 +1291,114 @@ impl ApiResp for BlockBase {
             file_ids,
             copied_from,
             discussions,
+            parent_id,
+            parent_table,
         } = self;
         for cid in content {
             state.add_pending_record(global_info, *cid, *space_id, TableType::Block, true);
         }
         properties.on_fetched((), global_info, state);
-        if let Some(sid) = space_id {
-            state.add_pending_record(global_info, *sid, None, TableType::Space, true);
-        }
-        if let Some(cid) = created_by_id {
-            state.add_pending_object(
-                global_info,
-                *cid,
-                None,
-                created_by_table.and_then(|v| v.into_known().map(ObjectType::Record)),
-                true,
-            );
-        }
-        if let Some(leid) = last_edited_by_id {
-            state.add_pending_object(
-                global_info,
-                *leid,
-                None,
-                last_edited_by_table.and_then(|v| v.into_known().map(ObjectType::Record)),
-                true,
-            );
-        }
+        state.add_pending_obj_with_table_opt(
+            global_info,
+            *parent_id,
+            *parent_table,
+            state.config.follow_parent,
+        );
+        space_id.add_pending(global_info, state, (), true);
+        state.add_pending_obj_with_table_opt(global_info, *created_by_id, *created_by_table, true);
+        state.add_pending_obj_with_table_opt(
+            global_info,
+            *last_edited_by_id,
+            *last_edited_by_table,
+            true,
+        );
         for fid in file_ids {
-            state.add_pending_file(global_info, *fid, true);
+            fid.add_pending(global_info, state, (), true);
         }
         for did in discussions {
             state.add_pending_record(global_info, *did, *space_id, TableType::Discussion, true);
         }
         if let Some(id) = copied_from {
-            state.add_pending_unknown(global_info, *id, None, true);
+            state.add_pending_unknown(
+                global_info,
+                *id,
+                None,
+                Some(state.config.follow_copied_from),
+            );
         }
     }
 }
-impl ApiResp for crate::model::block::Pointer {
+impl ApiResp for crate::model::Pointer {
     type Id = ();
     #[inline]
     fn on_fetched(&self, (): Self::Id, global_info: &mut GlobalInfo, state: &mut VisitState) {
+        let Self {
+            id,
+            space_id,
+            table,
+        } = self;
+        space_id.add_pending(global_info, state, (), true);
         state.add_pending_object(
             global_info,
-            self.id,
-            Some(self.space_id),
-            self.table.into_known().map(ObjectType::Record),
+            *id,
+            Some(*space_id),
+            ObjectType::from_table(*table),
             true,
         );
+    }
+}
+impl ApiResp for crate::model::CopiedFromPointer {
+    type Id = ();
+    #[inline]
+    fn on_fetched(&self, (): Self::Id, global_info: &mut GlobalInfo, state: &mut VisitState) {
+        let Self(crate::model::Pointer {
+            id,
+            space_id,
+            table,
+        }) = self;
+        space_id.add_pending(global_info, state, (), state.config.follow_copied_from);
+        state.add_pending_object(
+            global_info,
+            *id,
+            Some(*space_id),
+            ObjectType::from_table(*table),
+            state.config.follow_copied_from,
+        );
+    }
+}
+impl ApiResp for crate::model::block::Permission {
+    type Id = ();
+    fn on_fetched(&self, (): Self::Id, global_info: &mut GlobalInfo, state: &mut VisitState) {
+        let Self {
+            user_id,
+            bot_id,
+            parent_id,
+            parent_table,
+        } = self;
+        user_id.add_pending(global_info, state, (), false);
+        bot_id.add_ignored(global_info, state);
+        state.add_pending_obj_with_table_opt(global_info, *parent_id, *parent_table, false);
+    }
+}
+impl ApiResp for crate::model::block::Permissions {
+    type Id = ();
+    fn on_fetched(&self, (): Self::Id, global_info: &mut GlobalInfo, state: &mut VisitState) {
+        for p in self.0.iter() {
+            p.on_fetched((), global_info, state);
+        }
     }
 }
 impl ApiResp for crate::model::block::CollectionViewFormat {
     type Id = ();
     fn on_fetched(&self, _: Self::Id, global_info: &mut GlobalInfo, state: &mut VisitState) {
-        let Self { collection_pointer } = self;
+        let Self {
+            collection_pointer,
+            copied_from_pointer,
+            site_id,
+        } = self;
         collection_pointer.on_fetched((), global_info, state);
+        copied_from_pointer.on_fetched((), global_info, state);
+        site_id.add_ignored(global_info, state);
     }
 }
 impl ApiResp for crate::model::block::CollectionViewPageFormat {
@@ -1098,15 +1408,25 @@ impl ApiResp for crate::model::block::CollectionViewPageFormat {
             collection_pointer,
             page_icon,
             page_cover,
+            copied_from_pointer,
+            site_id,
         } = self;
         collection_pointer.on_fetched((), global_info, state);
+        copied_from_pointer.on_fetched((), global_info, state);
+        site_id.add_ignored(global_info, state);
     }
 }
 impl ApiResp for crate::model::block::TableFormat {
     type Id = ();
     fn on_fetched(&self, _: Self::Id, global_info: &mut GlobalInfo, state: &mut VisitState) {
-        let Self { collection_pointer } = self;
+        let Self {
+            collection_pointer,
+            copied_from_pointer,
+            site_id,
+        } = self;
         collection_pointer.on_fetched((), global_info, state);
+        copied_from_pointer.on_fetched((), global_info, state);
+        site_id.add_ignored(global_info, state);
     }
 }
 impl ApiResp for crate::model::block::OtherFormat {
@@ -1121,18 +1441,24 @@ impl ApiResp for crate::model::block::OtherFormat {
             bookmark_cover,
             automation_id,
             collection_pointer,
+            copied_from_pointer,
+            site_id,
+            bot_id,
+            external_object_id,
         } = self;
         transclusion_reference_pointer.on_fetched((), global_info, state);
         alias_pointer.on_fetched((), global_info, state);
-        if let Some(aid) = automation_id {
-            state.add_obj_other(global_info, *aid);
-        }
         collection_pointer.on_fetched((), global_info, state);
+        copied_from_pointer.on_fetched((), global_info, state);
+        site_id.add_ignored(global_info, state);
+        bot_id.add_ignored(global_info, state);
+        external_object_id.add_ignored(global_info, state);
+        automation_id.add_pending(global_info, state, (), true);
     }
 }
 impl ApiResp for crate::model::block::Block {
-    type Id = Uuid;
-    fn on_fetched(&self, id: Self::Id, global_info: &mut GlobalInfo, state: &mut VisitState) {
+    type Id = RecordPtr;
+    fn on_fetched(&self, ptr: Self::Id, global_info: &mut GlobalInfo, state: &mut VisitState) {
         match self {
             Self::Page {
                 base,
@@ -1140,10 +1466,16 @@ impl ApiResp for crate::model::block::Block {
                     crate::model::block::PageFormat {
                         page_cover,
                         page_icon,
+                        copied_from_pointer,
+                        site_id,
                     },
+                permissions,
             } => {
-                state.add_pending_page(global_info, id, true);
+                state.add_pending_page(global_info, ptr.id, true);
                 base.on_fetched((), global_info, state);
+                copied_from_pointer.on_fetched((), global_info, state);
+                site_id.add_ignored(global_info, state);
+                permissions.on_fetched((), global_info, state);
             }
             Self::Table {
                 base,
@@ -1151,13 +1483,18 @@ impl ApiResp for crate::model::block::Block {
                 collection_id,
                 view_ids,
             } => {
-                state.add_fetched_record(global_info, id, base.space_id, TableType::Block);
+                state.add_fetched_record(
+                    global_info,
+                    ptr.id,
+                    merge_space_uuid(ptr.space_id, base.space_id),
+                    TableType::Block,
+                );
                 base.on_fetched((), global_info, state);
                 format.on_fetched((), global_info, state);
                 state.add_pending_record(
                     global_info,
                     *collection_id,
-                    base.space_id,
+                    None,
                     TableType::Collection,
                     true,
                 );
@@ -1165,7 +1502,7 @@ impl ApiResp for crate::model::block::Block {
                     state.add_pending_collection_view(
                         global_info,
                         *vid,
-                        base.space_id,
+                        None,
                         Some(*collection_id),
                         true,
                     );
@@ -1177,23 +1514,26 @@ impl ApiResp for crate::model::block::Block {
                 format,
                 collection_id,
             } => {
-                state.add_fetched_record(global_info, id, base.space_id, TableType::Block);
+                state.add_fetched_record(
+                    global_info,
+                    ptr.id,
+                    merge_space_uuid(ptr.space_id, base.space_id),
+                    TableType::Block,
+                );
                 base.on_fetched((), global_info, state);
                 format.on_fetched((), global_info, state);
-                if let Some(cid) = collection_id {
-                    state.add_pending_record(
-                        global_info,
-                        *cid,
-                        base.space_id,
-                        TableType::Collection,
-                        true,
-                    );
-                }
+                state.add_pending_record_opt(
+                    global_info,
+                    *collection_id,
+                    None,
+                    TableType::Collection,
+                    true,
+                );
                 for vid in view_ids {
                     state.add_pending_collection_view(
                         global_info,
                         *vid,
-                        base.space_id,
+                        None,
                         *collection_id,
                         true,
                     );
@@ -1205,92 +1545,293 @@ impl ApiResp for crate::model::block::Block {
                 view_ids,
                 collection_id,
             } => {
-                state.add_fetched_record(global_info, id, base.space_id, TableType::Block);
+                state.add_fetched_record(
+                    global_info,
+                    ptr.id,
+                    merge_space_uuid(ptr.space_id, base.space_id),
+                    TableType::Block,
+                );
                 base.on_fetched((), global_info, state);
                 format.on_fetched((), global_info, state);
-                if let Some(cid) = collection_id {
-                    state.add_pending_record(
-                        global_info,
-                        *cid,
-                        base.space_id,
-                        TableType::Collection,
-                        true,
-                    );
-                }
+                state.add_pending_record_opt(
+                    global_info,
+                    *collection_id,
+                    None,
+                    TableType::Collection,
+                    true,
+                );
                 for vid in view_ids {
                     state.add_pending_collection_view(
                         global_info,
                         *vid,
-                        base.space_id,
+                        None,
                         *collection_id,
                         true,
                     );
                 }
             }
-            Self::Other { ty, format, base } => {
-                state.add_fetched_record(global_info, id, base.space_id, TableType::Block);
+            Self::Other {
+                ty: _,
+                format,
+                base,
+            } => {
+                state.add_fetched_record(
+                    global_info,
+                    ptr.id,
+                    merge_space_uuid(ptr.space_id, base.space_id),
+                    TableType::Block,
+                );
                 base.on_fetched((), global_info, state);
                 format.on_fetched((), global_info, state);
             }
         }
     }
 }
-impl ApiResp for crate::model::Collection {
-    type Id = Uuid;
-    fn on_fetched(&self, id: Self::Id, global_info: &mut GlobalInfo, state: &mut VisitState) {
-        state.add_fetched_record(global_info, id, None, TableType::Collection);
+impl ApiResp for crate::model::collection::Field {
+    type Id = ();
+    fn on_fetched(&self, _: Self::Id, global_info: &mut GlobalInfo, state: &mut VisitState) {
+        match self {
+            Self::MultiSelect { options } => {
+                for crate::model::collection::SelectOption { id } in options {
+                    state.add_obj_other(global_info, *id);
+                }
+            }
+            Self::Select { options } => {
+                for crate::model::collection::SelectOption { id } in options {
+                    state.add_obj_other(global_info, *id);
+                }
+            }
+            Self::Other { ty: _ } => (),
+        }
+    }
+}
+impl ApiResp for crate::model::collection::Collection {
+    type Id = RecordPtr;
+    fn on_fetched(&self, ptr: Self::Id, global_info: &mut GlobalInfo, state: &mut VisitState) {
         let Self {
             id: _,
             name,
+            schema,
+            format:
+                crate::model::collection::CollectionFormat {
+                    copied_from_pointer,
+                },
             parent_id,
+            parent_table,
             copied_from,
             template_pages,
+            space_id,
         } = self;
+        state.add_fetched_record(
+            global_info,
+            ptr.id,
+            merge_space_uuid(ptr.space_id, *space_id),
+            TableType::Collection,
+        );
         name.on_fetched((), global_info, state);
-        if let Some(id) = parent_id {
-            state.add_pending_unknown(global_info, *id, None, false);
-        }
+        state.add_pending_obj_with_table_opt(
+            global_info,
+            *parent_id,
+            *parent_table,
+            state.config.follow_parent,
+        );
+        copied_from_pointer.on_fetched((), global_info, state);
         if let Some(id) = copied_from {
-            state.add_pending_unknown(global_info, *id, None, false);
+            state.add_pending_unknown(
+                global_info,
+                *id,
+                None,
+                Some(state.config.follow_copied_from),
+            );
         }
         for p in template_pages {
-            state.add_pending_unknown(global_info, *p, None, false);
+            state.add_pending_unknown(global_info, *p, None, Some(false));
+        }
+        for (_, f) in schema {
+            f.on_fetched((), global_info, state);
         }
     }
 }
-impl ApiResp for crate::model::CollectionView {
-    type Id = Uuid;
-    fn on_fetched(&self, id: Self::Id, global_info: &mut GlobalInfo, state: &mut VisitState) {
-        let Self { id: _, parent_id } = self;
-        state.add_pending_collection_view(global_info, id, None, None, true);
-        if let Some(pid) = parent_id {
-            state.add_pending_unknown(global_info, *pid, None, false);
+impl ApiResp for crate::model::collection_view::CollectionView {
+    type Id = RecordPtr;
+    fn on_fetched(&self, ptr: Self::Id, global_info: &mut GlobalInfo, state: &mut VisitState) {
+        let _span = tracing::info_span!(
+            "on_fetched_collection_view",
+            id = tracing::field::valuable(&UuidVal(ptr.id))
+        )
+        .entered();
+        let Self {
+            id: _,
+            format,
+            parent_id,
+            parent_table,
+            space_id,
+            page_sort,
+        } = self;
+        let crate::model::collection_view::CollectionViewFormat {
+            collection_pointer: col_ptr,
+            copied_from_pointer,
+            property_filters,
+        } = format;
+        col_ptr.on_fetched((), global_info, state);
+        copied_from_pointer.on_fetched((), global_info, state);
+        state.add_fetched_collection_view(
+            global_info,
+            ptr.id,
+            merge_space_uuid(ptr.space_id, *space_id),
+            col_ptr.as_ref().and_then(|v| {
+                if matches!(v.table, EnumVal::Known(TableType::Collection)) {
+                    Some(v.id)
+                } else {
+                    tracing::warn!("collection pointer's pointee is not a collection");
+                    None
+                }
+            }),
+            true,
+        );
+        state.add_pending_obj_with_table_opt(
+            global_info,
+            *parent_id,
+            *parent_table,
+            state.config.follow_parent,
+        );
+        for id in page_sort {
+            state.add_pending_unknown(global_info, *id, None, Some(false));
+        }
+        for crate::model::collection_view::PropertyFilter { id } in property_filters {
+            id.add_ignored(global_info, state);
         }
     }
 }
-impl<T: ApiResp> ApiResp for WithRole<T> {
-    type Id = T::Id;
+impl ApiResp for crate::model::Automation {
+    type Id = RecordPtr;
+    fn on_fetched(&self, ptr: Self::Id, global_info: &mut GlobalInfo, state: &mut VisitState) {
+        let Self(IgnoredAny) = self;
+        state.add_pending_record(
+            global_info,
+            ptr.id,
+            ptr.space_id,
+            TableType::Automation,
+            true,
+        );
+    }
+}
+impl ApiResp for crate::model::AutomationAction {
+    type Id = RecordPtr;
+    fn on_fetched(&self, ptr: Self::Id, global_info: &mut GlobalInfo, state: &mut VisitState) {
+        let Self(IgnoredAny) = self;
+        state.add_pending_record(
+            global_info,
+            ptr.id,
+            ptr.space_id,
+            TableType::AutomationAction,
+            true,
+        );
+    }
+}
+impl ApiResp for crate::model::Discussion {
+    type Id = RecordPtr;
+    fn on_fetched(&self, ptr: Self::Id, global_info: &mut GlobalInfo, state: &mut VisitState) {
+        let Self(IgnoredAny) = self;
+        state.add_pending_record(
+            global_info,
+            ptr.id,
+            ptr.space_id,
+            TableType::Discussion,
+            true,
+        );
+    }
+}
+impl ApiResp for crate::model::Space {
+    type Id = RecordPtr;
+    fn on_fetched(&self, ptr: Self::Id, global_info: &mut GlobalInfo, state: &mut VisitState) {
+        let Self(IgnoredAny) = self;
+        state.add_pending_record(global_info, ptr.id, None, TableType::Space, true);
+    }
+}
+impl ApiResp for crate::model::Team {
+    type Id = RecordPtr;
+    fn on_fetched(&self, ptr: Self::Id, global_info: &mut GlobalInfo, state: &mut VisitState) {
+        let Self(IgnoredAny) = self;
+        state.add_pending_record(global_info, ptr.id, ptr.space_id, TableType::Team, true);
+    }
+}
+impl<T: ApiResp<Id = RecordPtr>> ApiResp for WithRole<T> {
+    type Id = (TableType, Uuid);
     #[inline]
-    fn on_fetched(&self, id: Self::Id, global_info: &mut GlobalInfo, state: &mut VisitState) {
-        T::on_fetched(self.get_ref(), id, global_info, state);
+    fn on_fetched(
+        &self,
+        (table, id): Self::Id,
+        global_info: &mut GlobalInfo,
+        state: &mut VisitState,
+    ) {
+        let Self { space_id, value } = self;
+        match value {
+            /*  crate::types::RoleVal::NoRole(v)
+            |*/
+            crate::types::RoleVal::WithRole {
+                role: _,
+                value: Some(v),
+            } => T::on_fetched(
+                v,
+                RecordPtr {
+                    id,
+                    space_id: *space_id,
+                },
+                global_info,
+                state,
+            ),
+            crate::types::RoleVal::WithRole {
+                role: _,
+                value: None,
+            } => {
+                state.add_pending_object(
+                    global_info,
+                    id,
+                    *space_id,
+                    Some(ObjectType::Record(table)),
+                    true,
+                );
+            }
+        }
     }
 }
 impl ApiResp for crate::types::RecordMap {
     type Id = ();
     fn on_fetched(&self, _: Self::Id, global_info: &mut GlobalInfo, state: &mut VisitState) {
         let Self {
+            automation,
+            automation_action,
             block,
             collection,
             collection_view,
+            discussion,
+            space,
+            team,
         } = self;
         for (id, blk) in block.0.iter() {
-            blk.on_fetched(*id, global_info, state);
+            blk.on_fetched((TableType::Block, *id), global_info, state);
         }
         for (id, col) in collection.0.iter() {
-            col.on_fetched(*id, global_info, state);
+            col.on_fetched((TableType::Collection, *id), global_info, state);
         }
         for (id, col_view) in collection_view.0.iter() {
-            col_view.on_fetched(*id, global_info, state);
+            col_view.on_fetched((TableType::CollectionView, *id), global_info, state);
+        }
+        for (id, a) in automation.0.iter() {
+            a.on_fetched((TableType::Automation, *id), global_info, state);
+        }
+        for (id, aa) in automation_action.0.iter() {
+            aa.on_fetched((TableType::AutomationAction, *id), global_info, state);
+        }
+        for (id, d) in discussion.0.iter() {
+            d.on_fetched((TableType::Discussion, *id), global_info, state);
+        }
+        for (id, s) in space.0.iter() {
+            s.on_fetched((TableType::Space, *id), global_info, state);
+        }
+        for (id, t) in team.0.iter() {
+            t.on_fetched((TableType::Team, *id), global_info, state);
         }
     }
 }
@@ -1301,8 +1842,12 @@ impl ApiResp for crate::types::load_cached_page_chunk_v2::Response {
             cursors: _,
             record_map,
             space_id,
+            dedupe_session_id,
         } = self;
         state.add_pending_record(global_info, *space_id, None, TableType::Space, true);
+        if let Some(id) = dedupe_session_id {
+            state.add_obj_other(global_info, *id);
+        }
         record_map.on_fetched((), global_info, state);
     }
 }
@@ -1321,6 +1866,13 @@ impl ApiResp for crate::types::query_collection::Response {
             });
     }
 }
+impl ApiResp for crate::types::sync_record_values_main::Response {
+    type Id = ();
+    fn on_fetched(&self, _: Self::Id, global_info: &mut GlobalInfo, state: &mut VisitState) {
+        let Self { record_map } = self;
+        record_map.on_fetched((), global_info, state);
+    }
+}
 impl<T: ApiResp> ApiResp for crate::client::Response<T> {
     type Id = T::Id;
     fn on_fetched(&self, id: Self::Id, global_info: &mut GlobalInfo, state: &mut VisitState) {
@@ -1329,43 +1881,52 @@ impl<T: ApiResp> ApiResp for crate::client::Response<T> {
     }
 }
 
-#[derive(ToGCbor)]
-enum Instance {
-    #[gcbor(rename = "www.notion.so")]
-    NotionSo,
-}
-
 type ObjectData<'a> = crate::ObjectData<&'a MessageInfo, &'a [MessageInfo]>;
 
-pub struct Fetcher<'a> {
+pub struct Fetcher {
     client: crate::client::Client,
-    data_tar: &'a mut webar_http_lib::data_tar::DataTar,
-    object_file: webar_http_lib::object_store::ObjectFile,
-    debug_file: std::fs::File,
-    debug_buf: Vec<u8>,
+    data_tar: webar_http_lib::data_writer::DataTar,
+    object_file: webar_http_lib::data_writer::CborFile,
+    debug_file: webar_http_lib::data_writer::JsonSeqFile,
     path_buf: String,
     info: GlobalInfo,
     seq: usize,
 }
-impl<'a> Fetcher<'a> {
+impl Fetcher {
     pub fn new(
         client: crate::client::Client,
-        debug_file: std::fs::File,
-        data_tar: &'a mut webar_http_lib::data_tar::DataTar,
-        object_file: webar_http_lib::object_store::ObjectFile,
-    ) -> Self {
-        Self {
+        data_name: &CStr,
+        make_writer: &mut webar_http_lib::data_writer::MakeWriter,
+    ) -> anyhow::Result<Self> {
+        let data_writer = make_writer.new_writer(
+            data_name,
+            crate::PACKAGE,
+            uuid!("59b34b1f-43d9-4617-8bb8-538af10bc309"),
+            &(),
+            &(),
+        )?;
+        let data_tar = data_writer
+            .objects_tar()
+            .context("failed to create object data tar")?;
+        let object_file = data_writer
+            .objects_cbor()
+            .context("failed to create object cbor file")?;
+        let debug_file = data_writer
+            .create_jsonseq_writer(c"visitor_debug.json")
+            .context("failed to create visitor debug file")?;
+        data_writer.finish()?;
+
+        Ok(Self {
             client,
             data_tar,
+            object_file,
+            debug_file,
             path_buf: String::new(),
             info: GlobalInfo {
                 objects: HashMap::new(),
             },
-            object_file,
-            debug_file,
-            debug_buf: Vec::new(),
             seq: 0,
-        }
+        })
     }
     fn get_page_chunk(&mut self, page_id: Uuid, vis: &mut VisitState) -> anyhow::Result<()> {
         let _span = tracing::info_span!(
@@ -1373,10 +1934,12 @@ impl<'a> Fetcher<'a> {
             page_id = tracing::field::display(&page_id)
         )
         .entered();
-        let (_, info, state) = vis.add_obj_page(&mut self.info, page_id).unwrap();
-        if info.status.content {
+        let r = vis.add_obj_page(&mut self.info, page_id).unwrap();
+        if r.info.status.content {
             return Ok(());
         }
+
+        tracing::info!("fetching page");
 
         let seq = self.seq;
         self.seq += 1;
@@ -1384,7 +1947,7 @@ impl<'a> Fetcher<'a> {
         let (msg_ids, val) = match self.client.load_cached_page_chunk_v2(page_id) {
             Ok(r) => r,
             Err(e) => {
-                state.status.content = VisitStatus::Failed;
+                r.state.status.content = VisitStatus::Failed;
                 tracing::error!(
                     err = webar_http_lib::error_field(&e),
                     "failed to get page: {e:?}"
@@ -1393,7 +1956,7 @@ impl<'a> Fetcher<'a> {
             }
         };
 
-        self.object_file.add_object(&ObjectData::UnofficalApiV3(
+        self.object_file.add(&ObjectData::UnofficalApiV3(
             crate::UnofficalApiV3Data::LoadCachedPageChunkV2 {
                 page_id,
                 responses: msg_ids.as_slice(),
@@ -1401,12 +1964,15 @@ impl<'a> Fetcher<'a> {
         ))?;
 
         self.path_buf.clear();
-        let _ = std::write!(&mut self.path_buf, "page-chunk/{seq:08x}_{page_id}");
+        let _ = std::write!(
+            &mut self.path_buf,
+            "load-cached-page-chunk-v2/{seq:08x}_{page_id}"
+        );
         self.data_tar
             .add_message_info_seq(&self.path_buf, "json", &msg_ids)?;
 
-        info.status.content = true;
-        state.status.content = VisitStatus::Fetched;
+        r.info.status.content = true;
+        r.state.status.content = VisitStatus::Fetched;
         for resp in val.iter() {
             resp.on_fetched((), &mut self.info, vis);
         }
@@ -1426,17 +1992,23 @@ impl<'a> Fetcher<'a> {
         )
         .entered();
 
-        let (_, info, state) = vis
+        let r = vis
             .add_obj_collection_view(
                 &mut self.info,
                 qc.collection_view_id,
-                Some(qc.space_id),
+                Some(SpaceId(qc.space_id)),
                 Some(qc.collection_id),
             )
             .unwrap();
-        if info.status.data {
+        if r.info.status.data {
             return Ok(());
         }
+        if !r.config.is_space_allowed(Some(SpaceId(qc.space_id))) {
+            r.state.status.data = VisitStatus::Ignored;
+            return Ok(());
+        }
+
+        tracing::info!("fetching collection view");
 
         let seq = self.seq;
         self.seq += 1;
@@ -1448,7 +2020,7 @@ impl<'a> Fetcher<'a> {
             {
                 Ok(r) => r,
                 Err(e) => {
-                    state.status.data = VisitStatus::Failed;
+                    r.state.status.data = VisitStatus::Failed;
                     tracing::error!(
                         err = webar_http_lib::error_field(&e),
                         "failed to query collection: {e:?}"
@@ -1457,7 +2029,7 @@ impl<'a> Fetcher<'a> {
                 }
             };
 
-        self.object_file.add_object(&ObjectData::UnofficalApiV3(
+        self.object_file.add(&ObjectData::UnofficalApiV3(
             crate::UnofficalApiV3Data::QueryCollection {
                 collection: qc.collection_id,
                 collection_view: qc.collection_view_id,
@@ -1477,63 +2049,77 @@ impl<'a> Fetcher<'a> {
             std::slice::from_ref(&msg_id),
         )?;
 
-        info.status.data = true;
-        state.status.data = VisitStatus::Fetched;
+        r.info.status.data = true;
+        r.state.status.data = VisitStatus::Fetched;
 
         val.on_fetched((), &mut self.info, vis);
         Ok(())
     }
-    fn sync_records_space(
-        &mut self,
-        rec: &[GetRecord],
-        vis: &mut VisitState,
-    ) -> anyhow::Result<()> {
-        let _span = tracing::info_span!("sync_records_space").entered();
+    fn sync_records_main(&mut self, rec: &[GetRecord], vis: &mut VisitState) -> anyhow::Result<()> {
+        let _span = tracing::info_span!("sync_records_main").entered();
+
+        tracing::info!("fetching records");
 
         let seq = self.seq;
         self.seq += 1;
 
-        let (msg_ids, val) =
-            match self
-                .client
-                .sync_record_values_space_initial(rec.iter().filter_map(|r| {
-                    let status = match r.table {
-                        TableType::CollectionView => {
-                            match vis.add_obj_collection_view(&mut self.info, r.id, None, None) {
-                                Ok((_, _, state)) => &mut state.status.info,
-                                Err(_) => return None,
+        let (msg_ids, val) = match self
+            .client
+            .sync_record_values_main(rec.iter().filter_map(|r| {
+                let status = match r.table {
+                    TableType::CollectionView => {
+                        match vis.add_obj_collection_view(&mut self.info, r.id, None, None) {
+                            Ok(r) => &mut r.state.status.info,
+                            Err(e) => {
+                                tracing::warn!(
+                                    id = tracing::field::valuable(&UuidVal(r.id)),
+                                    info_ty = tracing::field::valuable(&e),
+                                    "inconsistent object type between fetch collection view info request and object info"
+                                );
+                                return None;
                             }
                         }
-                        _ => match vis.add_obj_record(&mut self.info, r.id, None, r.table) {
-                            Ok((_, _, state)) => &mut state.status.fetched,
-                            Err(_) => return None,
-                        },
-                    };
-                    if status.is_fetched() {
-                        None
-                    } else {
-                        *status = VisitStatus::Fetching;
-                        Some(RecordPointer::new(r.id, r.space_id, r.table))
                     }
-                })) {
-                Ok(r) => r,
-                Err(e) => {
-                    tracing::error!(
-                        err = webar_http_lib::error_field(&e),
-                        "failed to get record value: {e:?}"
-                    );
-                    return Ok(());
+                    _ => match vis.add_obj_record(&mut self.info, r.id, None, r.table) {
+                        Ok(r) => &mut r.state.status.fetched,
+                        // block object turned into page, no need to warn
+                        Err(Some(ObjectType::Page)) => return None,
+                        Err(e) => {
+                            tracing::warn!(
+                                id = tracing::field::valuable(&UuidVal(r.id)),
+                                req_ty = tracing::field::valuable(&r.table),
+                                info_ty = tracing::field::valuable(&e),
+                                "inconsistent object type between fetch record request and object info"
+                            );
+                            return None;
+                        }
+                    },
+                };
+                if status.is_fetched() {
+                    None
+                } else {
+                    *status = VisitStatus::Fetching;
+                    Some(RecordPointer::new(r.id, r.table))
                 }
-            };
+            })) {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::error!(
+                    err = webar_http_lib::error_field(&e),
+                    "failed to get record value: {e:?}"
+                );
+                return Ok(());
+            }
+        };
 
-        self.object_file.add_object(&ObjectData::UnofficalApiV3(
-            crate::UnofficalApiV3Data::SyncRecordsSpaceInitial {
+        self.object_file.add(&ObjectData::UnofficalApiV3(
+            crate::UnofficalApiV3Data::SyncRecordValuesMain {
                 responses: &msg_ids,
             },
         ))?;
 
         self.path_buf.clear();
-        let _ = std::write!(&mut self.path_buf, "sync-records-space-initial/{seq:08x}");
+        let _ = std::write!(&mut self.path_buf, "sync-record-values-main/{seq:08x}");
         self.data_tar
             .add_message_info_seq(&self.path_buf, "json", &msg_ids)?;
 
@@ -1544,7 +2130,7 @@ impl<'a> Fetcher<'a> {
         Ok(())
     }
 
-    fn exec_fetch(&mut self, config: VisitConfig, queue: OpsQueue) -> anyhow::Result<()> {
+    fn exec_fetch(&mut self, config: VisitConfig<'_>, queue: OpsQueue) -> anyhow::Result<()> {
         let mut vis = VisitState::new(config, queue);
         while !vis.queue.is_empty() {
             while let Some(p) = vis.queue.get_page.pop_front() {
@@ -1554,40 +2140,60 @@ impl<'a> Fetcher<'a> {
                 self.query_collection_view(&q, &mut vis)?;
             }
             if !vis.queue.get_record.is_empty() {
-                let mut queue = std::mem::take(&mut vis.queue.get_record);
-                self.sync_records_space(&queue, &mut vis)?;
+                std::mem::swap(&mut vis.queue.get_record, &mut vis.queue.fetch_record);
+
+                let mut queue = std::mem::take(&mut vis.queue.fetch_record);
+                self.sync_records_main(&queue, &mut vis)?;
                 queue.clear();
-                vis.queue.get_record = queue; // reuse allocated memory
+                debug_assert!(vis.queue.fetch_record.is_empty());
+                vis.queue.fetch_record = queue;
             }
         }
 
-        self.debug_buf.clear();
-        self.debug_buf.push(0x1e);
-        serde_json::to_writer(
-            &mut self.debug_buf,
-            &DebugOutput {
-                global_info: &self.info,
-                visit_state: &vis,
-            },
-        )
-        .unwrap();
-        self.debug_buf.push(b'\n');
-        std::io::Write::write_all(&mut self.debug_file, &self.debug_buf)?;
+        self.debug_file.add(&DebugOutput {
+            global_info: &self.info,
+            visit_state: &vis,
+        })?;
+
+        for (id, state) in vis.objects.iter() {
+            if !state.is_final() {
+                let info = self.info.objects.get(id);
+                tracing::warn!(
+                    id = tracing::field::valuable(id),
+                    info = tracing::field::valuable(&info),
+                    state = tracing::field::valuable(state),
+                    "unable to fetch object"
+                )
+            }
+        }
 
         Ok(())
     }
 
-    pub fn fetch_page_rec(&mut self, page_id: Uuid) -> anyhow::Result<()> {
+    pub fn fetch_page_rec(
+        &mut self,
+        page_id: Uuid,
+        allowed_spaces: &HashSet<Uuid>,
+    ) -> anyhow::Result<()> {
         self.exec_fetch(
             VisitConfig {
                 recurse_page: true,
                 fetch_mention_page: false,
+                follow_copied_from: false,
+                follow_parent: false,
+                allowed_spaces,
             },
             OpsQueue {
                 get_page: VecDeque::from([GetPage { page_id }]),
                 query_collection: VecDeque::new(),
                 get_record: Vec::new(),
+                fetch_record: Vec::new(),
             },
         )
+    }
+
+    pub fn finish(self) -> anyhow::Result<()> {
+        self.data_tar.finish()?;
+        Ok(())
     }
 }

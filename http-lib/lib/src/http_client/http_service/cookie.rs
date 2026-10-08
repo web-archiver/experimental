@@ -85,24 +85,15 @@ impl<S> Cookie<S> {
         url: &url::Url,
         req: &mut http::request::Parts,
     ) -> Result<(), SetReqHeaderError> {
-        let hdr = {
-            let store = self.store.read().unwrap();
-            let mut hdr = String::new();
-            let mut iter = store.get_request_values(url);
-            if let Some((k, v)) = iter.next() {
-                let _ = write!(&mut hdr, "{k}={v}");
-                for (k, v) in iter {
-                    let _ = write!(&mut hdr, "; {k}={v}");
-                }
-            }
-            if hdr.is_empty() {
-                return Ok(());
-            }
-            http::HeaderValue::from_maybe_shared(hdr)
-                .map_err(SetReqHeaderError::InvalidReqHeader)?
-        };
-        req.headers.append(http::header::COOKIE, hdr);
-
+        let store = self.store.read().unwrap();
+        for (k, v) in store.get_request_values(url) {
+            // http2 recommends use separate cookie headers for compression efficiency
+            req.headers.append(
+                http::header::COOKIE,
+                http::HeaderValue::from_maybe_shared(format!("{k}={v}"))
+                    .map_err(SetReqHeaderError::InvalidReqHeader)?,
+            );
+        }
         Ok(())
     }
 }

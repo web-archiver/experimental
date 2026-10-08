@@ -11,5 +11,6 @@ pub mod text {
     pub mod normalized;
 }
 
+pub mod object;
 pub mod service;
 pub mod time;

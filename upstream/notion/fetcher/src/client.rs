@@ -15,14 +15,14 @@ impl ApiEndpoints {
     fn new() -> Self {
         macro_rules! api_path {
             ($p:literal) => {
-                Url::from_static(concat!("https://www.notion.so/api/v3/", $p)).unwrap()
+                Url::from_static(concat!("https://app.notion.com/api/v3/", $p)).unwrap()
             };
         }
 
         Self {
             get_page: api_path!("loadCachedPageChunkV2"),
-            query_collection: api_path!("queryCollection?src=initial_load"),
-            get_blocks: api_path!("syncRecordValuesSpaceInitial"),
+            query_collection: api_path!("queryCollection?src=change_group_limit"),
+            get_blocks: api_path!("syncRecordValuesMain"),
         }
     }
 }
@@ -41,14 +41,13 @@ pub type ArrayResp<R> = ([MessageInfo; 1], [Response<R>; 1]);
 pub type VecResp<R> = (Vec<MessageInfo>, Vec<Response<R>>);
 pub type SingleResp<R> = (MessageInfo, Response<R>);
 
-pub struct RecordPointer(crate::types::sync_record_values_space_initial::Pointer);
+pub struct RecordPointer(crate::types::sync_record_values_main::Req);
 impl RecordPointer {
-    pub fn new(id: Uuid, space_id: Uuid, table: TableType) -> Self {
-        use crate::types::sync_record_values_space_initial::*;
-        Self(Pointer {
+    pub fn new(id: Uuid, table: TableType) -> Self {
+        Self(crate::types::sync_record_values_main::Req {
             id,
-            space_id,
             table,
+            version: crate::types::sync_record_values_main::VERSION,
         })
     }
 }
@@ -80,7 +79,7 @@ impl Client {
         let req = map_req(self.api_client.request(http::Method::POST, url))
             .header(
                 http::header::HOST,
-                const { http::HeaderValue::from_static("www.notion.so") },
+                const { http::HeaderValue::from_static("app.notion.com") },
             )
             .header(
                 http::header::CONTENT_TYPE,
@@ -92,7 +91,7 @@ impl Client {
             )
             .header(
                 const { http::HeaderName::from_static("notion-client-version") },
-                const { http::HeaderValue::from_static("23.13.20260720.0325") },
+                const { http::HeaderValue::from_static("23.13.20260930.1956") },
             )
             .header(
                 const { http::HeaderName::from_static("x-notion-active-user-header") },
@@ -191,6 +190,7 @@ impl Client {
                     id: collection_id,
                     space_id,
                 },
+                collection: ReqCollection { id: collection_id },
                 collection_view: ReqCollectionView {
                     id: collection_view_id,
                     space_id,
@@ -223,21 +223,21 @@ impl Client {
 
     fn get_records_inner(
         &mut self,
-        requests: &[crate::types::sync_record_values_space_initial::Req],
-    ) -> anyhow::Result<SingleResp<crate::types::sync_record_values_space_initial::Response>> {
-        let _span = tracing::info_span!("sync_record_values_space_initial").entered();
-        use crate::types::sync_record_values_space_initial::*;
+        requests: &[crate::types::sync_record_values_main::Req],
+    ) -> anyhow::Result<SingleResp<crate::types::sync_record_values_main::Response>> {
+        let _span = tracing::info_span!("sync_record_values_main").entered();
+        use crate::types::sync_record_values_main::*;
         self.call_api_post::<Response>(
             self.endpoints.get_blocks.clone(),
             no_map,
             &Request { requests },
         )
     }
-    pub fn sync_record_values_space_initial(
+    pub fn sync_record_values_main(
         &mut self,
         records: impl IntoIterator<Item = RecordPointer>,
-    ) -> anyhow::Result<VecResp<crate::types::sync_record_values_space_initial::Response>> {
-        const MAX_REQ_LEN: usize = 400;
+    ) -> anyhow::Result<VecResp<crate::types::sync_record_values_main::Response>> {
+        const MAX_REQ_LEN: usize = 256;
         let records = records.into_iter();
 
         let req_count = records.size_hint().0.div_ceil(MAX_REQ_LEN);
@@ -246,12 +246,8 @@ impl Client {
 
         let mut req_buf = Vec::with_capacity(MAX_REQ_LEN);
 
-        use crate::types::sync_record_values_space_initial::*;
         for r in records {
-            req_buf.push(Req {
-                version: VERSION,
-                pointer: r.0,
-            });
+            req_buf.push(r.0);
             if req_buf.len() == MAX_REQ_LEN {
                 let (msg, vals) = self.get_records_inner(&req_buf)?;
                 ret_msg.push(msg);

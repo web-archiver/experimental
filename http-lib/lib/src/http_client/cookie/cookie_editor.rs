@@ -18,7 +18,7 @@ struct Cookie<'a> {
     http_only: bool,
     same_site: Option<SameSite>,
     session: bool,
-    expiration_date: Option<i64>,
+    expiration_date: Option<f64>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -28,7 +28,7 @@ pub(super) enum Error {
     #[error("failed to parse json: {0}")]
     Json(#[source] serde_json::Error),
     #[error("invalid expiration date: {0}")]
-    InvalidExpiration(i64),
+    InvalidExpiration(f64),
     #[error("failed to insert cookie: {0}")]
     Store(#[source] cookie_store::CookieError),
 }
@@ -51,7 +51,7 @@ pub(super) fn import_json(store: &mut cookie_store::CookieStore, json: &[u8]) ->
             builder = builder.expires(cookie::Expiration::Session)
         } else if let Some(e) = c.expiration_date {
             builder = builder.expires(cookie::Expiration::DateTime(
-                time::OffsetDateTime::from_unix_timestamp(e)
+                time::OffsetDateTime::from_unix_timestamp(e as i64)
                     .map_err(|_| Error::InvalidExpiration(e))?,
             ))
         }
