@@ -13,6 +13,9 @@ members = [
   "net/stream-log/conn-rs",
   "net/tcp/logger",
   "net/tls/rustls-conn",
+  "store/backend/fs",
+  "store/blob-filter-bin",
+  "utils/fs",
   "upstream/notion/core-rs",
   "upstream/notion/fetcher",
 ]
@@ -55,3 +58,4 @@ tokio = "1.43.0"
 pin-project = "1.1.13"
 webar-core = { path = "./core/rs" }
 webar-net-core = { path = "./net/core-rs" }
+webar-utils-fs = { path = "./utils/fs" }

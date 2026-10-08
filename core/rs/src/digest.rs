@@ -23,7 +23,7 @@ impl<'a> Debug for DebugHash<'a> {
 }
 
 const SHA256_SIZE: usize = 32;
-#[derive(Clone, Copy, PartialEq, Eq, Valuable)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Valuable)]
 pub struct Sha256(pub [u8; SHA256_SIZE]);
 impl Debug for Sha256 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -95,7 +95,7 @@ impl Default for Hasher {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Valuable)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Valuable)]
 pub enum Digest {
     Sha256(Sha256),
 }

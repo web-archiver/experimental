@@ -7,8 +7,16 @@ use crate::codec::gcbor::internal::{
     TypeInfo,
 };
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Valuable)]
+#[derive(Clone, PartialEq, Eq, Hash, Valuable)]
 pub struct ByteBuf(pub Vec<u8>);
+impl std::fmt::Debug for ByteBuf {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for d in self.0.iter() {
+            write!(f, "{d:02x}")?;
+        }
+        Ok(())
+    }
+}
 impl encoding::ToGCbor for ByteBuf {
     fn encode<W: Write>(
         &self,
@@ -28,7 +36,7 @@ impl<'buf> decoding::FromGCbor<'buf> for ByteBuf {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Hash)]
+#[derive(PartialEq, Eq, Hash)]
 #[repr(transparent)]
 pub struct Bytes(pub [u8]);
 impl Bytes {
@@ -37,6 +45,14 @@ impl Bytes {
     }
     pub fn as_bytes(&self) -> &[u8] {
         &self.0
+    }
+}
+impl std::fmt::Debug for Bytes {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for d in self.0.iter() {
+            write!(f, "{d:02x}")?;
+        }
+        Ok(())
     }
 }
 impl encoding::ToGCbor for Bytes {
