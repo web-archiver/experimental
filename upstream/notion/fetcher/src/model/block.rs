@@ -1,9 +1,12 @@
 use serde::Deserialize;
 use uuid::Uuid;
 
-use crate::model::{
-    AutomationId, CopiedFromPointer, FileId, OtherId, SpaceId, UserId,
-    rich_text::{IgnoredStr, RichText},
+use crate::{
+    fetcher::{ApiObject, GlobalInfo, ObjectId, OtherObjId, VisitState, merge_space_uuid},
+    model::{
+        AutomationId, CopiedFromPointer, FileId, OtherId, SpaceId, UserId,
+        rich_text::{IgnoredStr, RichText},
+    },
 };
 
 use super::{EnumVal, Pointer, TableType};
@@ -133,22 +136,53 @@ impl<'de> Deserialize<'de> for Properties {
         deserializer.deserialize_map(Visitor)
     }
 }
+impl ApiObject for Properties {
+    type Ptr = ();
+    fn update_state(&self, _: Self::Ptr, global_info: &mut GlobalInfo, state: &mut VisitState) {
+        let Self { source, rich_text } = self;
+        for txt in rich_text {
+            txt.update_state((), global_info, state);
+        }
+    }
+}
 
 #[derive(Deserialize)]
-pub(crate) struct Permission {
+struct Permission {
     #[serde(default)]
-    pub(crate) user_id: Option<UserId>,
+    user_id: Option<UserId>,
     #[serde(default)]
-    pub(crate) bot_id: Option<OtherId>,
+    bot_id: Option<OtherId>,
     #[serde(default)]
-    pub(crate) parent_id: Option<Uuid>,
+    parent_id: Option<Uuid>,
     #[serde(default)]
-    pub(crate) parent_table: Option<EnumVal<TableType>>,
+    parent_table: Option<EnumVal<TableType>>,
+}
+impl ApiObject for Permission {
+    type Ptr = ();
+    fn update_state(&self, _: Self::Ptr, global_info: &mut GlobalInfo, state: &mut VisitState) {
+        let Self {
+            user_id,
+            bot_id,
+            parent_id,
+            parent_table,
+        } = self;
+        user_id.add_pending(global_info, state, (), false);
+        bot_id.add_ignored(global_info, state);
+        state.add_pending_obj_with_table_opt(global_info, *parent_id, *parent_table, false);
+    }
 }
 
 #[derive(Default, Deserialize)]
 #[serde(transparent)]
-pub(crate) struct Permissions(pub(crate) Vec<Permission>);
+pub struct Permissions(Vec<Permission>);
+impl ApiObject for Permissions {
+    type Ptr = ();
+    fn update_state(&self, _: Self::Ptr, global_info: &mut GlobalInfo, state: &mut VisitState) {
+        for p in self.0.iter() {
+            p.update_state((), global_info, state);
+        }
+    }
+}
 
 #[derive(Deserialize)]
 #[non_exhaustive]
@@ -157,29 +191,81 @@ pub struct BlockBase {
     #[serde(default)]
     pub content: Vec<Uuid>,
     #[serde(default)]
-    pub(crate) properties: Properties,
+    properties: Properties,
     #[serde(default)]
-    pub(crate) space_id: Option<SpaceId>,
+    space_id: Option<SpaceId>,
     #[serde(default)]
-    pub(crate) parent_id: Option<Uuid>,
+    parent_id: Option<Uuid>,
     #[serde(default)]
-    pub(crate) parent_table: Option<EnumVal<TableType>>,
+    parent_table: Option<EnumVal<TableType>>,
     //#[serde(default)]
     //pub(crate) format: Option<Format>,
     #[serde(default)]
-    pub(crate) created_by_id: Option<Uuid>,
+    created_by_id: Option<Uuid>,
     #[serde(default)]
-    pub(crate) created_by_table: Option<EnumVal<TableType>>,
+    created_by_table: Option<EnumVal<TableType>>,
     #[serde(default)]
-    pub(crate) last_edited_by_id: Option<Uuid>,
+    last_edited_by_id: Option<Uuid>,
     #[serde(default)]
-    pub(crate) last_edited_by_table: Option<EnumVal<TableType>>,
+    last_edited_by_table: Option<EnumVal<TableType>>,
     #[serde(default)]
-    pub(crate) file_ids: Vec<FileId>,
+    file_ids: Vec<FileId>,
     #[serde(default)]
-    pub(crate) copied_from: Option<Uuid>,
+    copied_from: Option<Uuid>,
     #[serde(default)]
-    pub(crate) discussions: Vec<Uuid>,
+    discussions: Vec<Uuid>,
+}
+impl ApiObject for BlockBase {
+    type Ptr = ();
+    fn update_state(&self, _: Self::Ptr, global_info: &mut GlobalInfo, state: &mut VisitState) {
+        let Self {
+            id: _,
+            content,
+            properties,
+            space_id,
+            created_by_id,
+            created_by_table,
+            last_edited_by_id,
+            last_edited_by_table,
+            file_ids,
+            copied_from,
+            discussions,
+            parent_id,
+            parent_table,
+        } = self;
+        for cid in content {
+            state.add_pending_record(global_info, *cid, *space_id, TableType::Block, true);
+        }
+        properties.update_state((), global_info, state);
+        state.add_pending_obj_with_table_opt(
+            global_info,
+            *parent_id,
+            *parent_table,
+            state.config.follow_parent,
+        );
+        space_id.add_pending(global_info, state, (), true);
+        state.add_pending_obj_with_table_opt(global_info, *created_by_id, *created_by_table, true);
+        state.add_pending_obj_with_table_opt(
+            global_info,
+            *last_edited_by_id,
+            *last_edited_by_table,
+            true,
+        );
+        for fid in file_ids {
+            fid.add_pending(global_info, state, (), true);
+        }
+        for did in discussions {
+            state.add_pending_record(global_info, *did, *space_id, TableType::Discussion, true);
+        }
+        if let Some(id) = copied_from {
+            state.add_pending_unknown(
+                global_info,
+                *id,
+                None,
+                Some(state.config.follow_copied_from),
+            );
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -197,62 +283,130 @@ pub struct PageFormat {
 #[derive(Deserialize)]
 pub struct CollectionViewFormat {
     #[serde(default)]
-    pub(crate) site_id: Option<OtherId>,
+    site_id: Option<OtherId>,
     #[serde(default)]
-    pub(crate) collection_pointer: Option<Pointer>,
+    collection_pointer: Option<Pointer>,
     #[serde(default)]
-    pub(crate) copied_from_pointer: Option<CopiedFromPointer>,
+    copied_from_pointer: Option<CopiedFromPointer>,
+}
+impl ApiObject for CollectionViewFormat {
+    type Ptr = ();
+    fn update_state(&self, _: Self::Ptr, global_info: &mut GlobalInfo, state: &mut VisitState) {
+        let Self {
+            collection_pointer,
+            copied_from_pointer,
+            site_id,
+        } = self;
+        collection_pointer.update_state((), global_info, state);
+        copied_from_pointer.update_state((), global_info, state);
+        site_id.add_ignored(global_info, state);
+    }
 }
 
 #[derive(Deserialize)]
 pub struct CollectionViewPageFormat {
     #[serde(default)]
-    pub(crate) site_id: Option<OtherId>,
+    site_id: Option<OtherId>,
     #[serde(default)]
-    pub(crate) collection_pointer: Option<Pointer>,
+    collection_pointer: Option<Pointer>,
     #[serde(default)]
-    pub(crate) page_icon: Option<String>,
+    page_icon: Option<String>,
     #[serde(default)]
-    pub(crate) page_cover: Option<String>,
+    page_cover: Option<String>,
     #[serde(default)]
-    pub(crate) copied_from_pointer: Option<CopiedFromPointer>,
+    copied_from_pointer: Option<CopiedFromPointer>,
+}
+impl ApiObject for CollectionViewPageFormat {
+    type Ptr = ();
+    fn update_state(&self, _: Self::Ptr, global_info: &mut GlobalInfo, state: &mut VisitState) {
+        let Self {
+            collection_pointer,
+            page_icon,
+            page_cover,
+            copied_from_pointer,
+            site_id,
+        } = self;
+        collection_pointer.update_state((), global_info, state);
+        copied_from_pointer.update_state((), global_info, state);
+        site_id.add_ignored(global_info, state);
+    }
 }
 
 #[derive(Deserialize)]
 pub struct TableFormat {
     #[serde(default)]
-    pub(crate) site_id: Option<OtherId>,
-    pub(crate) collection_pointer: Option<Pointer>,
+    site_id: Option<OtherId>,
+    collection_pointer: Option<Pointer>,
     #[serde(default)]
-    pub(crate) copied_from_pointer: Option<CopiedFromPointer>,
+    copied_from_pointer: Option<CopiedFromPointer>,
+}
+impl ApiObject for TableFormat {
+    type Ptr = ();
+    fn update_state(&self, _: Self::Ptr, global_info: &mut GlobalInfo, state: &mut VisitState) {
+        let Self {
+            collection_pointer,
+            copied_from_pointer,
+            site_id,
+        } = self;
+        collection_pointer.update_state((), global_info, state);
+        copied_from_pointer.update_state((), global_info, state);
+        site_id.add_ignored(global_info, state);
+    }
 }
 
 #[derive(Deserialize)]
 pub struct OtherFormat {
     #[serde(default)]
-    pub(crate) site_id: Option<OtherId>,
+    site_id: Option<OtherId>,
     #[serde(default)]
-    pub(crate) transclusion_reference_pointer: Option<Pointer>,
+    transclusion_reference_pointer: Option<Pointer>,
     #[serde(default)]
-    pub(crate) alias_pointer: Option<Pointer>,
+    alias_pointer: Option<Pointer>,
     #[serde(default)]
-    pub(crate) page_cover: Option<String>,
+    page_cover: Option<String>,
     #[serde(default)]
-    pub(crate) page_icon: Option<String>,
+    page_icon: Option<String>,
     #[serde(default)]
-    pub(crate) bookmark_icon: Option<String>,
+    bookmark_icon: Option<String>,
     #[serde(default)]
-    pub(crate) bookmark_cover: Option<String>,
+    bookmark_cover: Option<String>,
     #[serde(default)]
-    pub(crate) automation_id: Option<AutomationId>,
+    automation_id: Option<AutomationId>,
     #[serde(default)]
-    pub(crate) collection_pointer: Option<Pointer>,
+    collection_pointer: Option<Pointer>,
     #[serde(default)]
-    pub(crate) copied_from_pointer: Option<CopiedFromPointer>,
+    copied_from_pointer: Option<CopiedFromPointer>,
     #[serde(default)]
-    pub(crate) external_object_id: Option<OtherId>,
+    external_object_id: Option<OtherId>,
     #[serde(default)]
-    pub(crate) bot_id: Option<OtherId>,
+    bot_id: Option<OtherId>,
+}
+impl ApiObject for OtherFormat {
+    type Ptr = ();
+    fn update_state(&self, _: Self::Ptr, global_info: &mut GlobalInfo, state: &mut VisitState) {
+        let Self {
+            transclusion_reference_pointer,
+            alias_pointer,
+            page_cover,
+            page_icon,
+            bookmark_icon,
+            bookmark_cover,
+            automation_id,
+            collection_pointer,
+            copied_from_pointer,
+            site_id,
+            bot_id,
+            external_object_id,
+        } = self;
+        transclusion_reference_pointer.update_state((), global_info, state);
+        alias_pointer.update_state((), global_info, state);
+        collection_pointer.update_state((), global_info, state);
+        copied_from_pointer.update_state((), global_info, state);
+        site_id.add_ignored(global_info, state);
+        bot_id.add_ignored(global_info, state);
+        external_object_id.add_ignored(global_info, state);
+        automation_id.add_pending(global_info, state, (), true);
+    }
 }
 
 #[derive(Deserialize)]
@@ -316,5 +470,136 @@ impl Block {
     }
     pub fn id(&self) -> &Uuid {
         &self.base().id
+    }
+}
+impl ApiObject for Block {
+    type Ptr = crate::fetcher::RecordPtr;
+    fn update_state(&self, ptr: Self::Ptr, global_info: &mut GlobalInfo, state: &mut VisitState) {
+        match self {
+            Self::Page {
+                base,
+                format:
+                    crate::model::block::PageFormat {
+                        page_cover,
+                        page_icon,
+                        copied_from_pointer,
+                        site_id,
+                    },
+                permissions,
+            } => {
+                state.add_pending_page(global_info, ptr.id, true);
+                base.update_state((), global_info, state);
+                copied_from_pointer.update_state((), global_info, state);
+                site_id.add_ignored(global_info, state);
+                permissions.update_state((), global_info, state);
+            }
+            Self::Table {
+                base,
+                format,
+                collection_id,
+                view_ids,
+            } => {
+                state.add_fetched_record(
+                    global_info,
+                    ptr.id,
+                    merge_space_uuid(ptr.space_id, base.space_id),
+                    TableType::Block,
+                );
+                base.update_state((), global_info, state);
+                format.update_state((), global_info, state);
+                state.add_pending_record(
+                    global_info,
+                    *collection_id,
+                    None,
+                    TableType::Collection,
+                    true,
+                );
+                for vid in view_ids {
+                    state.add_pending_collection_view(
+                        global_info,
+                        *vid,
+                        None,
+                        Some(*collection_id),
+                        true,
+                    );
+                }
+            }
+            Self::CollectionView {
+                base,
+                view_ids,
+                format,
+                collection_id,
+            } => {
+                state.add_fetched_record(
+                    global_info,
+                    ptr.id,
+                    merge_space_uuid(ptr.space_id, base.space_id),
+                    TableType::Block,
+                );
+                base.update_state((), global_info, state);
+                format.update_state((), global_info, state);
+                state.add_pending_record_opt(
+                    global_info,
+                    *collection_id,
+                    None,
+                    TableType::Collection,
+                    true,
+                );
+                for vid in view_ids {
+                    state.add_pending_collection_view(
+                        global_info,
+                        *vid,
+                        None,
+                        *collection_id,
+                        true,
+                    );
+                }
+            }
+            Self::CollectionViewPage {
+                base,
+                format,
+                view_ids,
+                collection_id,
+            } => {
+                state.add_fetched_record(
+                    global_info,
+                    ptr.id,
+                    merge_space_uuid(ptr.space_id, base.space_id),
+                    TableType::Block,
+                );
+                base.update_state((), global_info, state);
+                format.update_state((), global_info, state);
+                state.add_pending_record_opt(
+                    global_info,
+                    *collection_id,
+                    None,
+                    TableType::Collection,
+                    true,
+                );
+                for vid in view_ids {
+                    state.add_pending_collection_view(
+                        global_info,
+                        *vid,
+                        None,
+                        *collection_id,
+                        true,
+                    );
+                }
+            }
+            Self::Other {
+                ty: _,
+                format,
+                base,
+            } => {
+                state.add_fetched_record(
+                    global_info,
+                    ptr.id,
+                    merge_space_uuid(ptr.space_id, base.space_id),
+                    TableType::Block,
+                );
+                base.update_state((), global_info, state);
+                format.update_state((), global_info, state);
+            }
+        }
     }
 }

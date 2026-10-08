@@ -3,6 +3,10 @@ use std::marker::PhantomData;
 use serde::{Deserialize, de::IgnoredAny};
 use uuid::Uuid;
 
+use crate::fetcher::{
+    ApiObject, GlobalInfo, ObjectId, ObjectType, OtherObjId, RecordPtr, VisitState,
+};
+
 #[allow(dead_code)]
 trait EnumTag: Sized + 'static {
     const ALL: &[Self];
@@ -188,21 +192,57 @@ macro_rules! uuid_wrapper {
         $v struct $n($v Uuid);
     };
 }
+macro_rules! record_id_wrapper {
+    ($v:vis struct $n:ident($ty:expr);) => {
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+        #[serde(transparent)]
+        $v struct $n($v Uuid);
+        impl ObjectId<()> for $n {
+            fn add_pending(
+                &self,
+                global_info: &mut GlobalInfo,
+                state: &mut VisitState,
+                _: (),
+                do_fetch: bool,
+            ) {
+                state.add_pending_record(global_info, self.0, None, $ty, do_fetch);
+            }
+        }
+    };
+}
 
 uuid_wrapper!(
     pub(crate) struct OtherId;
 );
+impl OtherObjId for OtherId {
+    fn add_ignored(&self, global_info: &mut GlobalInfo, state: &mut VisitState) {
+        state.add_obj_other(global_info, self.0);
+    }
+}
+
 uuid_wrapper!(
     pub(crate) struct FileId;
 );
-uuid_wrapper!(
-    pub(crate) struct UserId;
+impl ObjectId<()> for FileId {
+    fn add_pending(
+        &self,
+        global_info: &mut GlobalInfo,
+        state: &mut VisitState,
+        _: (),
+        do_fetch: bool,
+    ) {
+        state.add_pending_file(global_info, self.0, do_fetch);
+    }
+}
+
+record_id_wrapper!(
+    pub(crate) struct UserId(TableType::NotionUser);
 );
-uuid_wrapper!(
-    pub struct SpaceId;
+record_id_wrapper!(
+    pub struct SpaceId(TableType::Space);
 );
-uuid_wrapper!(
-    pub(crate) struct AutomationId;
+record_id_wrapper!(
+    pub(crate) struct AutomationId(TableType::Automation);
 );
 
 #[derive(Deserialize)]
@@ -212,13 +252,50 @@ pub(crate) struct Pointer {
     pub space_id: SpaceId,
     pub table: EnumVal<TableType>,
 }
+impl ApiObject for Pointer {
+    type Ptr = ();
+    #[inline]
+    fn update_state(&self, (): Self::Ptr, global_info: &mut GlobalInfo, state: &mut VisitState) {
+        let Self {
+            id,
+            space_id,
+            table,
+        } = self;
+        space_id.add_pending(global_info, state, (), true);
+        state.add_pending_object(
+            global_info,
+            *id,
+            Some(*space_id),
+            ObjectType::from_table(*table),
+            true,
+        );
+    }
+}
 
 /// wrapper of [Pointer], since copied_from_pointer objects are not fetched by
 /// default
 #[derive(Deserialize)]
 #[serde(transparent)]
 pub(crate) struct CopiedFromPointer(pub Pointer);
-
+impl ApiObject for crate::model::CopiedFromPointer {
+    type Ptr = ();
+    #[inline]
+    fn update_state(&self, (): Self::Ptr, global_info: &mut GlobalInfo, state: &mut VisitState) {
+        let Self(crate::model::Pointer {
+            id,
+            space_id,
+            table,
+        }) = self;
+        space_id.add_pending(global_info, state, (), state.config.follow_copied_from);
+        state.add_pending_object(
+            global_info,
+            *id,
+            Some(*space_id),
+            ObjectType::from_table(*table),
+            state.config.follow_copied_from,
+        );
+    }
+}
 pub mod block;
 pub mod collect_uuids;
 pub mod collection;
@@ -226,25 +303,38 @@ pub mod collection_view;
 pub mod rich_text;
 
 macro_rules! ignored_obj {
-    ($v:vis struct $n:ident ;) => {
+    ($v:vis struct $n:ident($ty:expr) ;) => {
         #[derive(Deserialize)]
         #[serde(transparent)]
-        $v struct $n($v IgnoredAny);
+        $v struct $n(IgnoredAny);
+        impl ApiObject for $n {
+            type Ptr = RecordPtr;
+            fn update_state(&self, ptr: Self::Ptr, global_info: &mut GlobalInfo, state: &mut VisitState) {
+                let Self(IgnoredAny) = self;
+                state.add_pending_record(
+                    global_info,
+                    ptr.id,
+                    ptr.space_id,
+                    $ty,
+                    true,
+                );
+            }
+        }
     };
 }
 
 ignored_obj!(
-    pub(crate) struct Automation;
+    pub(crate) struct Automation(TableType::Automation);
 );
 ignored_obj!(
-    pub(crate) struct AutomationAction;
+    pub(crate) struct AutomationAction(TableType::AutomationAction);
 );
 ignored_obj!(
-    pub(crate) struct Discussion;
+    pub(crate) struct Discussion(TableType::Discussion);
 );
 ignored_obj!(
-    pub(crate) struct Space;
+    pub(crate) struct Space(TableType::Space);
 );
 ignored_obj!(
-    pub(crate) struct Team;
+    pub(crate) struct Team(TableType::Team);
 );

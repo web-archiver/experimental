@@ -1,21 +1,25 @@
 use serde::Deserialize;
 use uuid::Uuid;
 
-use crate::model::{CopiedFromPointer, EnumVal, OtherId, Pointer, SpaceId, TableType};
+use crate::{
+    fetcher::{ApiObject, GlobalInfo, OtherObjId, RecordPtr, VisitState, merge_space_uuid},
+    model::{CopiedFromPointer, EnumVal, OtherId, Pointer, SpaceId, TableType},
+    uuid_val::UuidVal,
+};
 
 #[derive(Deserialize)]
-pub(crate) struct PropertyFilter {
-    pub(crate) id: OtherId,
+struct PropertyFilter {
+    id: OtherId,
 }
 
 #[derive(Default, Deserialize)]
-pub(crate) struct CollectionViewFormat {
+struct CollectionViewFormat {
     #[serde(default)]
-    pub(crate) collection_pointer: Option<Pointer>,
+    collection_pointer: Option<Pointer>,
     #[serde(default)]
-    pub(crate) copied_from_pointer: Option<CopiedFromPointer>,
+    copied_from_pointer: Option<CopiedFromPointer>,
     #[serde(default)]
-    pub(crate) property_filters: Vec<PropertyFilter>,
+    property_filters: Vec<PropertyFilter>,
 }
 
 #[derive(Deserialize)]
@@ -23,13 +27,64 @@ pub(crate) struct CollectionViewFormat {
 pub struct CollectionView {
     pub id: Uuid,
     #[serde(default)]
-    pub(crate) format: CollectionViewFormat,
+    format: CollectionViewFormat,
     #[serde(default)]
-    pub(crate) parent_id: Option<Uuid>,
+    parent_id: Option<Uuid>,
     #[serde(default)]
-    pub(crate) parent_table: Option<EnumVal<TableType>>,
+    parent_table: Option<EnumVal<TableType>>,
     #[serde(default)]
-    pub(crate) space_id: Option<SpaceId>,
+    space_id: Option<SpaceId>,
     #[serde(default)]
-    pub(crate) page_sort: Vec<Uuid>,
+    page_sort: Vec<Uuid>,
+}
+impl ApiObject for CollectionView {
+    type Ptr = RecordPtr;
+    fn update_state(&self, ptr: Self::Ptr, global_info: &mut GlobalInfo, state: &mut VisitState) {
+        let _span = tracing::info_span!(
+            "on_fetched_collection_view",
+            id = tracing::field::valuable(&UuidVal(ptr.id))
+        )
+        .entered();
+        let Self {
+            id: _,
+            format,
+            parent_id,
+            parent_table,
+            space_id,
+            page_sort,
+        } = self;
+        let crate::model::collection_view::CollectionViewFormat {
+            collection_pointer: col_ptr,
+            copied_from_pointer,
+            property_filters,
+        } = format;
+        col_ptr.update_state((), global_info, state);
+        copied_from_pointer.update_state((), global_info, state);
+        state.add_fetched_collection_view(
+            global_info,
+            ptr.id,
+            merge_space_uuid(ptr.space_id, *space_id),
+            col_ptr.as_ref().and_then(|v| {
+                if matches!(v.table, EnumVal::Known(TableType::Collection)) {
+                    Some(v.id)
+                } else {
+                    tracing::warn!("collection pointer's pointee is not a collection");
+                    None
+                }
+            }),
+            true,
+        );
+        state.add_pending_obj_with_table_opt(
+            global_info,
+            *parent_id,
+            *parent_table,
+            state.config.follow_parent,
+        );
+        for id in page_sort {
+            state.add_pending_unknown(global_info, *id, None, Some(false));
+        }
+        for crate::model::collection_view::PropertyFilter { id } in property_filters {
+            id.add_ignored(global_info, state);
+        }
+    }
 }

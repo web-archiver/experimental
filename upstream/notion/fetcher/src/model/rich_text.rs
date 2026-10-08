@@ -3,6 +3,8 @@ use std::marker::PhantomData;
 use serde::{Deserialize, de::IgnoredAny};
 use uuid::Uuid;
 
+use crate::{fetcher::ApiObject, model::TableType};
+
 use super::{EnumVal, NamedEnumTag};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -294,5 +296,57 @@ impl<'de, T: for<'a> From<&'a str>> Deserialize<'de> for TextSpan<T> {
         deserializer.deserialize_seq(Visitor(PhantomData))
     }
 }
+impl<T> ApiObject for TextSpan<T> {
+    type Ptr = ();
+    fn update_state(
+        &self,
+        _: Self::Ptr,
+        global_info: &mut crate::fetcher::GlobalInfo,
+        state: &mut crate::fetcher::VisitState,
+    ) {
+        match self {
+            TextSpan::Plain {
+                text: _,
+                decorations: _,
+            } => (),
+            TextSpan::Math => (),
+            TextSpan::Mention(m) => match m {
+                Mention::User { user_id } => {
+                    state.add_pending_record(
+                        global_info,
+                        *user_id,
+                        None,
+                        TableType::NotionUser,
+                        state.config.fetch_mention,
+                    );
+                }
+                Mention::Page {
+                    page_id,
+                    space_id: _,
+                } => {
+                    state.add_pending_page(global_info, *page_id, state.config.fetch_mention);
+                }
+                Mention::Date => (),
+                Mention::Eoi => (),
+                Mention::Unknown => (),
+            },
+            TextSpan::Unknown => (),
+        }
+    }
+}
 
 pub type RichText<T> = Vec<TextSpan<T>>;
+
+impl<T> ApiObject for RichText<T> {
+    type Ptr = ();
+    fn update_state(
+        &self,
+        _: Self::Ptr,
+        global_info: &mut crate::fetcher::GlobalInfo,
+        state: &mut crate::fetcher::VisitState,
+    ) {
+        for s in self.iter() {
+            s.update_state((), global_info, state);
+        }
+    }
+}
