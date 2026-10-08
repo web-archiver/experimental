@@ -26,8 +26,8 @@ pub mod connection {
 
     pub const TCP_LOG_FILES: CaptureFilePaths = CaptureFilePaths {
         event_path: c"tcp_events.gcborseq",
-        tx_path: c"tcp_tx.data.bin",
-        rx_path: c"tcp_rx.data.bin",
+        tx_path: c"stream_tx.data.bin",
+        rx_path: c"stream_rx.data.bin",
     };
 
     pub const TLS_LOG_FILES: CaptureFilePaths = CaptureFilePaths {
@@ -38,9 +38,9 @@ pub mod connection {
     pub const TLS_INFO_FILE: FilePath = FilePath::new_throw(c"tls_info.gcbor");
 
     pub const PROXY_LOG_FILES: CaptureFilePaths = CaptureFilePaths {
-        event_path: c"proxy_io_events.gcborseq",
-        tx_path: c"proxy_tx.data.bin",
-        rx_path: c"proxy_rx.data.bin",
+        event_path: c"stream_io_events.gcborseq",
+        tx_path: c"stream_tx.data.bin",
+        rx_path: c"stream_rx.data.bin",
     };
 }
 
