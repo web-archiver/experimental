@@ -1,6 +1,7 @@
 // #![allow(unused)]
 
 use std::{
+    ops::Index,
     os::fd::{AsFd, BorrowedFd},
     sync::Arc,
 };
@@ -43,39 +44,79 @@ struct FetchInfo<'a> {
     system: SystemInfo<'a>,
 }
 
-#[non_exhaustive]
-pub struct Context<'a> {
-    pub runtime: &'a tokio::runtime::Handle,
-    pub blob_store: &'a Arc<blob::BlobStore>,
-    pub data_writer: &'a mut data_writer::MakeWriter,
-    pub http_client: &'a mut http_client::Client,
-}
-
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum Connector<'a> {
     TcpDirect,
     TcpCaptured,
     HttpTunnel { tunnel_socket: &'a str },
+    Null,
+}
+
+pub struct ClientConfig<'a> {
+    pub connector: Connector<'a>,
+    pub cookie: Option<http_client::cookie::CookieStore>,
+    pub req_per_sec: u32,
+}
+impl<'a> ClientConfig<'a> {
+    pub fn new(connector: Connector<'a>) -> Self {
+        Self {
+            connector,
+            cookie: None,
+            req_per_sec: 32,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ClientId {
+    Primary,
+    MediaSmall,
+    MediaLarge,
+}
+
+#[non_exhaustive]
+pub struct Context<'a> {
+    pub runtime: &'a tokio::runtime::Handle,
+    pub blob_store: &'a Arc<blob::BlobStore>,
+    pub data_writer: &'a mut data_writer::MakeWriter,
+    pub primary_client: &'a mut http_client::Client,
+    /// http client for small media files
+    pub media_small_client: &'a mut http_client::Client,
+    /// http client for large media files
+    pub media_large_client: &'a mut http_client::Client,
 }
 
 #[derive(Debug)]
 pub struct FetcherArgs<'a> {
     pub primary_connector: Connector<'a>,
+    pub media_connector: Connector<'a>,
 }
 
 #[non_exhaustive]
 pub struct FetcherConfig<'a> {
+    pub primary_client: ClientConfig<'a>,
+    pub media_small_client: ClientConfig<'a>,
+    pub media_large_client: ClientConfig<'a>,
     pub shared_blob_index: Option<&'a str>,
-    pub cookie_store: Option<http_client::cookie::CookieStore>,
-    pub req_per_sec: u32,
 }
-impl Default for FetcherConfig<'_> {
-    fn default() -> Self {
+impl<'a> FetcherConfig<'a> {
+    pub fn from_args(args: FetcherArgs<'a>) -> Self {
         Self {
+            primary_client: ClientConfig::new(args.primary_connector),
+            media_small_client: ClientConfig::new(args.media_connector.clone()),
+            media_large_client: ClientConfig::new(args.media_connector),
             shared_blob_index: None,
-            cookie_store: None,
-            req_per_sec: 32,
+        }
+    }
+}
+impl<'a> Index<ClientId> for FetcherConfig<'a> {
+    type Output = ClientConfig<'a>;
+    fn index(&self, index: ClientId) -> &Self::Output {
+        match index {
+            ClientId::Primary => &self.primary_client,
+            ClientId::MediaSmall => &self.media_small_client,
+            ClientId::MediaLarge => &self.media_large_client,
         }
     }
 }
@@ -88,6 +129,7 @@ enum ConnectorState<TD, TC, HT> {
     TcpDirect(TD),
     TcpCaptured(TC),
     HttpTunnel(HT),
+    Null,
 }
 type CSPreFork<'a> = ConnectorState<
     (),
@@ -109,6 +151,7 @@ impl<'a> ConnectorState<(), (), &'a str> {
             Connector::TcpDirect => Self::TcpDirect(()),
             Connector::TcpCaptured => Self::TcpCaptured(()),
             Connector::HttpTunnel { tunnel_socket } => Self::HttpTunnel(tunnel_socket),
+            Connector::Null => Self::Null,
         }
     }
     fn pre_fork(self) -> anyhow::Result<CSPreFork<'a>> {
@@ -119,6 +162,7 @@ impl<'a> ConnectorState<(), (), &'a str> {
                     .context("failed to create capture connection")?,
             )),
             Self::HttpTunnel(sock) => Ok(ConnectorState::HttpTunnel(sock)),
+            Self::Null => Ok(ConnectorState::Null),
         }
     }
 }
@@ -130,6 +174,7 @@ impl<'a> CSPreFork<'a> {
             }
             Self::TcpCaptured((con, _)) => ConnectorState::TcpCaptured(con),
             Self::HttpTunnel(c) => ConnectorState::HttpTunnel(c),
+            Self::Null => ConnectorState::Null,
         }
     }
     fn on_parent(self, root: BorrowedFd<'_>, span: tracing::Span) -> anyhow::Result<CSParent<'a>> {
@@ -151,6 +196,7 @@ impl<'a> CSPreFork<'a> {
                 )?,
             )),
             Self::HttpTunnel(_) => Ok(ConnectorState::HttpTunnel(())),
+            Self::Null => Ok(ConnectorState::Null),
         }
     }
 }
@@ -174,6 +220,7 @@ impl<'a> CSPreUnshare<'a> {
             Self::HttpTunnel(sock) => {
                 http_client::DefaultConnector::new_proxy_captured(root, id_generator, sock)
             }
+            Self::Null => http_client::DefaultConnector::new_null(root),
         }
     }
 }
@@ -183,21 +230,94 @@ impl<'a> CSParent<'a> {
             Self::TcpDirect(()) => Ok(()),
             Self::TcpCaptured(serv) => serv.wait().context("server error"),
             Self::HttpTunnel(()) => Ok(()),
+            Self::Null => Ok(()),
         }
     }
 }
 
+struct ConnectorMap<V> {
+    primary: V,
+    media_small: V,
+    media_large: V,
+}
+impl<V> ConnectorMap<V> {
+    fn new(f: impl Fn(ClientId) -> V) -> Self {
+        Self {
+            primary: f(ClientId::Primary),
+            media_small: f(ClientId::MediaSmall),
+            media_large: f(ClientId::MediaLarge),
+        }
+    }
+    fn try_new<E>(f: impl Fn(ClientId) -> Result<V, E>) -> Result<Self, E> {
+        Ok(Self {
+            primary: f(ClientId::Primary)?,
+            media_small: f(ClientId::MediaSmall)?,
+            media_large: f(ClientId::MediaLarge)?,
+        })
+    }
+    fn map<T>(self, f: impl Fn(V) -> T) -> ConnectorMap<T> {
+        ConnectorMap {
+            primary: f(self.primary),
+            media_small: f(self.media_small),
+            media_large: f(self.media_large),
+        }
+    }
+    fn try_map<T, E>(self, f: impl Fn(V) -> Result<T, E>) -> Result<ConnectorMap<T>, E> {
+        Ok(ConnectorMap {
+            primary: f(self.primary)?,
+            media_small: f(self.media_small)?,
+            media_large: f(self.media_large)?,
+        })
+    }
+    fn try_mapi<T, E>(self, f: impl Fn(ClientId, V) -> Result<T, E>) -> Result<ConnectorMap<T>, E> {
+        Ok(ConnectorMap {
+            primary: f(ClientId::Primary, self.primary)?,
+            media_small: f(ClientId::MediaSmall, self.media_small)?,
+            media_large: f(ClientId::MediaLarge, self.media_large)?,
+        })
+    }
+    fn try_zip<T, R, E>(
+        self,
+        other: ConnectorMap<T>,
+        f: impl Fn(V, T) -> Result<R, E>,
+    ) -> Result<ConnectorMap<R>, E> {
+        Ok(ConnectorMap {
+            primary: f(self.primary, other.primary)?,
+            media_small: f(self.media_small, other.media_small)?,
+            media_large: f(self.media_large, other.media_large)?,
+        })
+    }
+}
+impl<V> Index<ClientId> for ConnectorMap<V> {
+    type Output = V;
+    #[inline]
+    fn index(&self, index: ClientId) -> &Self::Output {
+        match index {
+            ClientId::Primary => &self.primary,
+            ClientId::MediaSmall => &self.media_small,
+            ClientId::MediaLarge => &self.media_large,
+        }
+    }
+}
+
+struct ClientCtx<'a> {
+    root: BorrowedFd<'a>,
+    config: ClientConfig<'a>,
+}
+
+struct RunCfg<'a> {
+    shared_blob_index: Option<&'a str>,
+}
 fn run(
     root: BorrowedFd,
     start_time: Timestamp,
     uuid: uuid::Uuid,
-    args: FetcherArgs<'_>,
-    cfgs: FetcherConfig<'_>,
-    primary_connector_root: BorrowedFd<'_>,
-    primary_connector: CSPreFork<'_>,
+    cfgs: RunCfg<'_>,
+    connector_ctx: ConnectorMap<ClientCtx<'_>>,
+    connector_state: ConnectorMap<CSPreFork<'_>>,
     main: impl FnOnce(Context<'_>) -> anyhow::Result<()>,
 ) -> Result<()> {
-    let primary_connector = primary_connector.pre_unshare();
+    let connectors = connector_state.map(CSPreFork::pre_unshare);
     unsafe {
         rustix::thread::unshare_unsafe(rustix::thread::UnshareFlags::NEWNET)
             .context("failed to create sandbox")?
@@ -212,17 +332,18 @@ fn run(
     let mut data_writer =
         data_writer::MakeWriter::new(root).context("failed to create object store factory")?;
     let id_generator = local_id::IdGenerator::new();
-    let mut http_client = http_client::Client::new(
-        primary_connector_root,
-        id_generator.clone(),
-        Arc::clone(&blob_store),
-        cfgs.cookie_store,
-        cfgs.req_per_sec,
-        primary_connector
-            .after_unshare(primary_connector_root, id_generator)
-            .context("failed to init connector")?,
-    )
-    .context("failed to init http client")?;
+    let mut clients = connector_ctx
+        .try_zip(connectors, |ctx, connector| {
+            http_client::Client::new(
+                ctx.root,
+                id_generator.clone(),
+                Arc::clone(&blob_store),
+                ctx.config.cookie,
+                ctx.config.req_per_sec,
+                connector.after_unshare(ctx.root, id_generator.clone())?,
+            )
+        })
+        .context("failed to init http client")?;
     let un = rustix::system::uname();
     let uname_str = un
         .sysname()
@@ -248,7 +369,9 @@ fn run(
         runtime: rt.handle(),
         blob_store: &blob_store,
         data_writer: &mut data_writer,
-        http_client: &mut http_client,
+        primary_client: &mut clients.primary,
+        media_small_client: &mut clients.media_small,
+        media_large_client: &mut clients.media_large,
     })
     .context("fetcher function returns error")?;
 
@@ -304,7 +427,6 @@ fn map_user_groups(
 
 pub fn run_fetcher(
     parent: &str,
-    args: FetcherArgs<'_>,
     cfgs: FetcherConfig<'_>,
     main: impl FnOnce(Context<'_>) -> anyhow::Result<()>,
 ) -> anyhow::Result<()> {
@@ -344,11 +466,20 @@ pub fn run_fetcher(
         root.as_fd(),
         webar_http_lib_core::fetch::CONNECTORS_DIR.c_path,
     )?;
-    let primary_conn_root = open_new_dir(root.as_fd(), c"connector/primary")?;
-    let primary_connector = ConnectorState::new(&args.primary_connector)
-        .pre_fork()
-        .context("failed to setup prefork state")
-        .context("failed to init primary connector")?;
+    let connector_roots = ConnectorMap::try_new(|idx| {
+        open_new_dir(
+            root.as_fd(),
+            match idx {
+                ClientId::Primary => c"connector/primary",
+                ClientId::MediaSmall => c"connector/media-small",
+                ClientId::MediaLarge => c"connector/media-large",
+            },
+        )
+    })
+    .context("failed to create connector roots")?;
+    let connector_state = ConnectorMap::new(|idx| ConnectorState::new(&cfgs[idx].connector))
+        .try_map(ConnectorState::pre_fork)
+        .context("failed to set connector prefork state")?;
 
     match unsafe { rustix::runtime::kernel_fork() }.context("failed to fork child")? {
         rustix::runtime::Fork::Child(_) => {
@@ -362,14 +493,30 @@ pub fn run_fetcher(
                 "data will be saved to {root_path}"
             );
             webar_net_tls_rustls_conn::global_init();
+
+            let client_ctxs = ConnectorMap {
+                primary: ClientCtx {
+                    root: connector_roots.primary.as_fd(),
+                    config: cfgs.primary_client,
+                },
+                media_small: ClientCtx {
+                    root: connector_roots.media_small.as_fd(),
+                    config: cfgs.media_small_client,
+                },
+                media_large: ClientCtx {
+                    root: connector_roots.media_large.as_fd(),
+                    config: cfgs.media_large_client,
+                },
+            };
             match run(
                 root.as_fd(),
                 start_time,
                 uuid,
-                args,
-                cfgs,
-                primary_conn_root.as_fd(),
-                primary_connector,
+                RunCfg {
+                    shared_blob_index: cfgs.shared_blob_index,
+                },
+                client_ctxs,
+                connector_state,
                 main,
             ) {
                 Ok(()) => Ok(()),
@@ -385,13 +532,22 @@ pub fn run_fetcher(
                 return Err(e.context("failed to init tracing for parent"));
             }
 
-            let primary_connector = primary_connector
-                .on_parent(
-                    primary_conn_root.as_fd(),
-                    tracing::info_span!("primary_connector_server"),
-                )
-                .context("failed to start primary connector server")?;
-
+            let connectors = connector_state
+                .try_mapi(|idx, c| {
+                    c.on_parent(
+                        connector_roots[idx].as_fd(),
+                        match idx {
+                            ClientId::Primary => tracing::info_span!("primary_connector_server"),
+                            ClientId::MediaSmall => {
+                                tracing::info_span!("media_small_connector_server")
+                            }
+                            ClientId::MediaLarge => {
+                                tracing::info_span!("media_large_connector_server")
+                            }
+                        },
+                    )
+                })
+                .context("failed to start connector servers")?;
             let (_, stat) = rustix::io::retry_on_intr(|| {
                 rustix::process::waitpid(Some(pid), rustix::process::WaitOptions::empty())
             })
@@ -401,8 +557,8 @@ pub fn run_fetcher(
                 anyhow::bail!("child returned error {stat:?}");
             }
 
-            primary_connector
-                .on_child_exit()
+            connectors
+                .try_map(ConnectorState::on_child_exit)
                 .context("failed to shutdown server")?;
             Ok(())
         }

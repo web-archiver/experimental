@@ -102,16 +102,22 @@ impl conn_meta::ConnectionMeta for BaseConn {
 }
 
 #[derive(Debug, thiserror::Error)]
+#[error("connection is not allowed")]
+struct NotAllowed;
+
+#[derive(Debug, thiserror::Error)]
 #[error(transparent)]
 enum BaseError {
     TcpDirect(service_ty!(TcpDirect, Error)),
     TcpCaptured(service_ty!(TcpCaptured, Error)),
     HttpTunnel(service_ty!(HttpTunnel, Error)),
+    NotAllowedError(NotAllowed),
 }
 enum BaseConnector {
     TcpDirect(TcpDirect),
     TcpCaptured(TcpCaptured),
     HttpTunnel(HttpTunnel),
+    Null,
 }
 impl AsyncService<&super::ConnectReq<'_>> for BaseConnector {
     type Response = BaseConn;
@@ -129,6 +135,7 @@ impl AsyncService<&super::ConnectReq<'_>> for BaseConnector {
             Self::TcpDirect(s) => wrap_ret!(s, Tcp, TcpDirect),
             Self::TcpCaptured(s) => wrap_ret!(s, Tcp, TcpCaptured),
             Self::HttpTunnel(s) => wrap_ret!(s, HttpTunnel, HttpTunnel),
+            Self::Null => Err(Box::new(BaseError::NotAllowedError(NotAllowed))),
         }
     }
 }
@@ -266,6 +273,9 @@ impl DefaultConnector {
             ))
             .build();
         Self::new_inner(root, BaseConnector::HttpTunnel(base))
+    }
+    pub(crate) fn new_null(root: BorrowedFd<'_>) -> anyhow::Result<Self> {
+        Self::new_inner(root, BaseConnector::Null)
     }
 }
 

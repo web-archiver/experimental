@@ -109,7 +109,7 @@ impl<C> DefaultService<C> {
         root: BorrowedFd<'_>,
         id_generator: crate::local_id::IdGenerator,
         blob_store: Arc<crate::blob::BlobStore>,
-        cookies: cookie_store::CookieStore,
+        cookies: super::cookie::CookieStore,
         req_per_sec: u32,
         connector: C,
     ) -> Result<Self, rustix::io::Errno>

@@ -16,12 +16,12 @@ fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     webar_http_lib::run_fetcher(
         &cli.root,
-        webar_http_lib::FetcherArgs {
-            primary_connector: webar_http_lib::Connector::TcpCaptured,
-        },
         {
-            let mut cfg = webar_http_lib::FetcherConfig::default();
-            cfg.cookie_store = Some(
+            let mut cfg = webar_http_lib::FetcherConfig::from_args(webar_http_lib::FetcherArgs {
+                primary_connector: webar_http_lib::Connector::TcpCaptured,
+                media_connector: webar_http_lib::Connector::Null,
+            });
+            cfg.primary_client.cookie = Some(
                 CookieStore::from_cookie_editor_json(
                     std::fs::read(&cli.cookie_file)
                         .context("failed to read cookie file")?
@@ -36,7 +36,7 @@ fn main() -> anyhow::Result<()> {
             let mut fetcher = webar_upstream_notion_fetcher::fetcher::Fetcher::new(
                 webar_upstream_notion_fetcher::client::Client::new(
                     ctx.runtime,
-                    ctx.http_client.clone(),
+                    ctx.primary_client.clone(),
                 ),
                 c"data",
                 &mut *ctx.data_writer,

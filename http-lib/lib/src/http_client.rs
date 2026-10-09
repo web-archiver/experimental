@@ -177,7 +177,7 @@ impl Client {
             root,
             id_generator.clone(),
             blob_store,
-            cookies.unwrap_or_default().0,
+            cookies.unwrap_or_default(),
             req_per_sec,
             connector,
         )?))

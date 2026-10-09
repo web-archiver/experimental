@@ -1,5 +1,4 @@
 use std::{
-    fmt::Write,
     future::Future,
     sync::{Arc, RwLock},
     task::Poll,
@@ -123,8 +122,8 @@ where
 #[derive(Debug, Clone)]
 pub struct CookieLayer(Arc<RwLock<cookie_store::CookieStore>>);
 impl CookieLayer {
-    pub fn new(store: cookie_store::CookieStore) -> Self {
-        Self(Arc::new(RwLock::new(store)))
+    pub fn new(store: crate::http_client::cookie::CookieStore) -> Self {
+        Self(store.0)
     }
 }
 impl<S> OnceLayer<S> for CookieLayer {
