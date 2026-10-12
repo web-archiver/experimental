@@ -1,32 +1,111 @@
 use std::{os::fd::BorrowedFd, sync::Arc, task::Poll};
 
-use anyhow::Context as _;
-
 use webar_core::service::{builder::ServiceBuilder, AsyncService};
 
 use crate::http_client::connector::{conn_meta::ConnectionMeta, uri_parser};
 
 use super::{addr_sel, capture, conn_meta, http_tunnel, https, tcp_log, tokio_io};
 
-type TcpConnector<S> =
-    tcp_log::TcpLogService<conn_meta::ConnMetaService<addr_sel::AddrSelService<S>>>;
-
-type TcpDirect = TcpConnector<webar_net_direct_conn::tcp::Connector>;
-type TcpCaptured = TcpConnector<webar_net_pktcap_conn::client::TcpConnector>;
-type HttpTunnel = capture::Capture<
-    conn_meta::ConnMetaService<
-        http_tunnel::HttpTunnel<
-            webar_net_direct_conn::unix::StreamConnector,
-            std::sync::Arc<std::os::unix::net::SocketAddr>,
-        >,
-    >,
->;
-
 macro_rules! service_ty {
     ($t:ty, $v:ident) => {
         <$t as AsyncService<&'static super::ConnectReq<'static>>>::$v
     };
 }
+
+#[pin_project::pin_project(project=StreamTunProj)]
+enum StreamTunTrans {
+    Unix(#[pin] tokio::net::UnixStream),
+}
+macro_rules! forward_tunnel_pin {
+    ($v:ident, $f:ident($($a:expr),*)) => {
+        match $v.project() {
+            StreamTunProj::Unix(c) => c.$f($($a,)*)
+        }
+    };
+}
+impl tokio::io::AsyncRead for StreamTunTrans {
+    fn poll_read(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        forward_tunnel_pin!(self, poll_read(cx, buf))
+    }
+}
+impl tokio::io::AsyncWrite for StreamTunTrans {
+    fn poll_write(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        forward_tunnel_pin!(self, poll_write(cx, buf))
+    }
+    fn poll_write_vectored(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        bufs: &[std::io::IoSlice<'_>],
+    ) -> Poll<std::io::Result<usize>> {
+        forward_tunnel_pin!(self, poll_write_vectored(cx, bufs))
+    }
+    fn is_write_vectored(&self) -> bool {
+        match self {
+            Self::Unix(c) => c.is_write_vectored(),
+        }
+    }
+    fn poll_flush(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        forward_tunnel_pin!(self, poll_flush(cx))
+    }
+    fn poll_shutdown(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        forward_tunnel_pin!(self, poll_shutdown(cx))
+    }
+}
+impl hyper_util::client::legacy::connect::Connection for StreamTunTrans {
+    fn connected(&self) -> hyper_util::client::legacy::connect::Connected {
+        match self {
+            Self::Unix(c) => c.connected(),
+        }
+    }
+}
+
+enum StreamTunInner {
+    Unix {
+        conn: webar_net_direct_conn::unix::StreamConnector,
+        addr: std::os::unix::net::SocketAddr,
+    },
+}
+impl AsyncService<()> for StreamTunInner {
+    type Response = StreamTunTrans;
+    type Error = std::io::Error;
+    async fn call_async(&self, (): ()) -> Result<Self::Response, Self::Error> {
+        match self {
+            Self::Unix { conn, addr } => conn.call_async(addr).await.map(StreamTunTrans::Unix),
+        }
+    }
+}
+
+pub struct StreamTunConnector(StreamTunInner);
+impl StreamTunConnector {
+    pub fn new_unix(addr: std::os::unix::net::SocketAddr) -> Self {
+        Self(StreamTunInner::Unix {
+            conn: webar_net_direct_conn::unix::StreamConnector::new(),
+            addr,
+        })
+    }
+}
+
+type TcpConnector<S> =
+    tcp_log::TcpLogService<conn_meta::ConnMetaService<addr_sel::AddrSelService<S>>>;
+
+type TcpDirect = TcpConnector<webar_net_direct_conn::tcp::Connector>;
+type TcpCaptured = TcpConnector<webar_net_pktcap_conn::client::TcpConnector>;
+type HttpTunnel =
+    capture::Capture<conn_meta::ConnMetaService<http_tunnel::HttpTunnel<StreamTunInner, ()>>>;
 
 #[pin_project::pin_project(project=ConnProj)]
 enum BaseConn {
@@ -257,13 +336,10 @@ impl DefaultConnector {
     pub(crate) fn new_proxy_captured(
         root: BorrowedFd<'_>,
         id_generator: crate::local_id::IdGenerator,
-        proxy_sock: &str,
+        trans: StreamTunConnector,
     ) -> anyhow::Result<Self> {
-        let base = ServiceBuilder::new(webar_net_direct_conn::unix::StreamConnector::new())
-            .once_layer(http_tunnel::HttpTunnelLayer::new(Arc::new(
-                std::os::unix::net::SocketAddr::from_pathname(proxy_sock)
-                    .context("invalid socket path")?,
-            )))
+        let base = ServiceBuilder::new(trans.0)
+            .once_layer(http_tunnel::HttpTunnelLayer::new(()))
             .once_layer(conn_meta::ConnMetaLayer::with_connector(
                 root,
                 id_generator,

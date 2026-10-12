@@ -27,4 +27,4 @@ mod tokio_io;
 mod tracing;
 mod uri_parser;
 
-pub use default::DefaultConnector;
+pub use default::{DefaultConnector, StreamTunConnector};

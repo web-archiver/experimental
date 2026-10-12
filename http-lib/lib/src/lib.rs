@@ -46,10 +46,18 @@ struct FetchInfo<'a> {
 
 #[derive(Debug, Clone)]
 #[non_exhaustive]
+pub enum StreamTunnelTransport<'a> {
+    UnixPath { socket: &'a str },
+}
+
+#[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum Connector<'a> {
     TcpDirect,
     TcpCaptured,
-    HttpTunnel { tunnel_socket: &'a str },
+    HttpTunnel {
+        transport: StreamTunnelTransport<'a>,
+    },
     Null,
 }
 
@@ -125,6 +133,26 @@ pub fn error_field(e: &anyhow::Error) -> &(dyn std::error::Error + 'static) {
     e.as_ref()
 }
 
+enum StreamTunnelState<U> {
+    Unix(U),
+}
+type STSMain = StreamTunnelState<std::os::unix::net::SocketAddr>;
+impl STSMain {
+    fn new(arg: &StreamTunnelTransport<'_>) -> anyhow::Result<Self> {
+        match arg {
+            StreamTunnelTransport::UnixPath { socket } => Ok(Self::Unix(
+                std::os::unix::net::SocketAddr::from_pathname(socket)
+                    .context("invalid unix domain socket path")?,
+            )),
+        }
+    }
+    fn into_trans(self) -> http_client::StreamTunConnector {
+        match self {
+            Self::Unix(addr) => http_client::StreamTunConnector::new_unix(addr),
+        }
+    }
+}
+
 enum ConnectorState<TD, TC, HT> {
     TcpDirect(TD),
     TcpCaptured(TC),
@@ -137,20 +165,20 @@ type CSPreFork<'a> = ConnectorState<
         webar_net_pktcap_conn::client::Connection,
         webar_net_pktcap_conn::server::Connection,
     ),
-    &'a str,
+    STSMain,
 >;
 type CSPreUnshare<'a> = ConnectorState<
     webar_net_direct_conn::tcp::Connector,
     webar_net_pktcap_conn::client::Connection,
-    &'a str,
+    STSMain,
 >;
 type CSParent<'a> = ConnectorState<(), webar_net_pktcap_conn::server::ServerHandle, ()>;
-impl<'a> ConnectorState<(), (), &'a str> {
-    fn new(arg: &Connector<'a>) -> Self {
+impl<'a> ConnectorState<(), (), &'a StreamTunnelTransport<'a>> {
+    fn new(arg: &'a Connector) -> Self {
         match arg {
             Connector::TcpDirect => Self::TcpDirect(()),
             Connector::TcpCaptured => Self::TcpCaptured(()),
-            Connector::HttpTunnel { tunnel_socket } => Self::HttpTunnel(tunnel_socket),
+            Connector::HttpTunnel { transport } => Self::HttpTunnel(transport),
             Connector::Null => Self::Null,
         }
     }
@@ -161,7 +189,7 @@ impl<'a> ConnectorState<(), (), &'a str> {
                 webar_net_pktcap_conn::new_connection()
                     .context("failed to create capture connection")?,
             )),
-            Self::HttpTunnel(sock) => Ok(ConnectorState::HttpTunnel(sock)),
+            Self::HttpTunnel(sock) => Ok(ConnectorState::HttpTunnel(STSMain::new(sock)?)),
             Self::Null => Ok(ConnectorState::Null),
         }
     }
@@ -217,9 +245,11 @@ impl<'a> CSPreUnshare<'a> {
                     webar_net_pktcap_conn::client::Client::new(con)?,
                 ),
             ),
-            Self::HttpTunnel(sock) => {
-                http_client::DefaultConnector::new_proxy_captured(root, id_generator, sock)
-            }
+            Self::HttpTunnel(sock) => http_client::DefaultConnector::new_proxy_captured(
+                root,
+                id_generator,
+                sock.into_trans(),
+            ),
             Self::Null => http_client::DefaultConnector::new_null(root),
         }
     }

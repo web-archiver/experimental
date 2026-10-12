@@ -200,32 +200,29 @@ pub mod unix {
             std::task::Poll::Ready(self.0.take().unwrap())
         }
     }
-    impl<A> webar_core::service::Service<A> for StreamConnector
-    where
-        A: AsRef<SocketAddr>,
-    {
+    impl webar_core::service::Service<&SocketAddr> for StreamConnector {
         type Response = tokio::net::UnixStream;
         type Error = std::io::Error;
         type Future = StreamConnectFuture;
-        fn call(&self, req: A) -> Self::Future {
+        fn call(&self, req: &SocketAddr) -> Self::Future {
             StreamConnectFuture(Some(
-                std::os::unix::net::UnixStream::connect_addr(req.as_ref()).and_then(|sock| {
+                std::os::unix::net::UnixStream::connect_addr(req).and_then(|sock| {
                     sock.set_nonblocking(true)?;
                     tokio::net::UnixStream::from_std(sock)
                 }),
             ))
         }
     }
-    impl<A: AsRef<SocketAddr>> webar_core::service::AsyncService<A> for StreamConnector {
+    impl webar_core::service::AsyncService<&SocketAddr> for StreamConnector {
         type Response = tokio::net::UnixStream;
         type Error = std::io::Error;
         #[inline]
         fn call_async(
             &self,
-            req: A,
+            req: &SocketAddr,
         ) -> impl Future<Output = std::prelude::v1::Result<Self::Response, Self::Error>> + Send
         {
-            webar_core::service::Service::<A>::call(self, req)
+            webar_core::service::Service::call(self, req)
         }
     }
 }

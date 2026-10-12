@@ -8,7 +8,7 @@ use http::{HeaderName, HeaderValue, StatusCode};
 use webar_core::{codec::gcbor::GCborCodec, digest::Digest, service::Service};
 
 use crate::blob::BlobStore;
-pub(crate) use connector::DefaultConnector;
+pub(crate) use connector::{DefaultConnector, StreamTunConnector};
 pub use http_service::{
     id::{MessageId, RequestId},
     ReqBody,
