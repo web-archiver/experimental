@@ -226,3 +226,35 @@ pub mod unix {
         }
     }
 }
+
+pub mod vsock {
+
+    pub use tokio_vsock::VsockStream;
+
+    #[derive(Debug, Clone, Copy)]
+    pub struct ConnectReq(tokio_vsock::VsockAddr);
+    impl ConnectReq {
+        pub fn from_cid(cid: u32, port: u32) -> Self {
+            Self(tokio_vsock::VsockAddr::new(cid, port))
+        }
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct StreamConnector();
+    impl StreamConnector {
+        #[allow(clippy::new_without_default)]
+        pub fn new() -> Self {
+            Self()
+        }
+    }
+    impl webar_core::service::AsyncService<ConnectReq> for StreamConnector {
+        type Response = VsockStream;
+        type Error = std::io::Error;
+        fn call_async(
+            &self,
+            req: ConnectReq,
+        ) -> impl Future<Output = Result<Self::Response, Self::Error>> + Send {
+            VsockStream::connect(req.0)
+        }
+    }
+}

@@ -15,11 +15,13 @@ macro_rules! service_ty {
 #[pin_project::pin_project(project=StreamTunProj)]
 enum StreamTunTrans {
     Unix(#[pin] tokio::net::UnixStream),
+    Vsock(#[pin] webar_net_direct_conn::vsock::VsockStream),
 }
 macro_rules! forward_tunnel_pin {
     ($v:ident, $f:ident($($a:expr),*)) => {
         match $v.project() {
-            StreamTunProj::Unix(c) => c.$f($($a,)*)
+            StreamTunProj::Unix(c) => c.$f($($a,)*),
+            StreamTunProj::Vsock(c) => c.$f($($a,)*),
         }
     };
 }
@@ -50,6 +52,7 @@ impl tokio::io::AsyncWrite for StreamTunTrans {
     fn is_write_vectored(&self) -> bool {
         match self {
             Self::Unix(c) => c.is_write_vectored(),
+            Self::Vsock(c) => c.is_write_vectored(),
         }
     }
     fn poll_flush(
@@ -69,6 +72,7 @@ impl hyper_util::client::legacy::connect::Connection for StreamTunTrans {
     fn connected(&self) -> hyper_util::client::legacy::connect::Connected {
         match self {
             Self::Unix(c) => c.connected(),
+            Self::Vsock(c) => hyper_util::client::legacy::connect::Connected::new(),
         }
     }
 }
@@ -78,6 +82,10 @@ enum StreamTunInner {
         conn: webar_net_direct_conn::unix::StreamConnector,
         addr: std::os::unix::net::SocketAddr,
     },
+    Vsock {
+        conn: webar_net_direct_conn::vsock::StreamConnector,
+        addr: webar_net_direct_conn::vsock::ConnectReq,
+    },
 }
 impl AsyncService<()> for StreamTunInner {
     type Response = StreamTunTrans;
@@ -85,6 +93,7 @@ impl AsyncService<()> for StreamTunInner {
     async fn call_async(&self, (): ()) -> Result<Self::Response, Self::Error> {
         match self {
             Self::Unix { conn, addr } => conn.call_async(addr).await.map(StreamTunTrans::Unix),
+            Self::Vsock { conn, addr } => conn.call_async(*addr).await.map(StreamTunTrans::Vsock),
         }
     }
 }
@@ -95,6 +104,12 @@ impl StreamTunConnector {
         Self(StreamTunInner::Unix {
             conn: webar_net_direct_conn::unix::StreamConnector::new(),
             addr,
+        })
+    }
+    pub fn new_vsock(cid: u32, port: u32) -> Self {
+        Self(StreamTunInner::Vsock {
+            conn: webar_net_direct_conn::vsock::StreamConnector::new(),
+            addr: webar_net_direct_conn::vsock::ConnectReq::from_cid(cid, port),
         })
     }
 }

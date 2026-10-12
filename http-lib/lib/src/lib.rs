@@ -48,6 +48,7 @@ struct FetchInfo<'a> {
 #[non_exhaustive]
 pub enum StreamTunnelTransport<'a> {
     UnixPath { socket: &'a str },
+    Vsock { cid: u32, port: u32 },
 }
 
 #[derive(Debug, Clone)]
@@ -135,6 +136,7 @@ pub fn error_field(e: &anyhow::Error) -> &(dyn std::error::Error + 'static) {
 
 enum StreamTunnelState<U> {
     Unix(U),
+    Vsock { cid: u32, port: u32 },
 }
 type STSMain = StreamTunnelState<std::os::unix::net::SocketAddr>;
 impl STSMain {
@@ -144,11 +146,16 @@ impl STSMain {
                 std::os::unix::net::SocketAddr::from_pathname(socket)
                     .context("invalid unix domain socket path")?,
             )),
+            StreamTunnelTransport::Vsock { cid, port } => Ok(Self::Vsock {
+                cid: *cid,
+                port: *port,
+            }),
         }
     }
     fn into_trans(self) -> http_client::StreamTunConnector {
         match self {
             Self::Unix(addr) => http_client::StreamTunConnector::new_unix(addr),
+            Self::Vsock { cid, port } => http_client::StreamTunConnector::new_vsock(cid, port),
         }
     }
 }
