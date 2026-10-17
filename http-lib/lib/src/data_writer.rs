@@ -2,7 +2,7 @@ use std::{
     ffi::CStr,
     io::Write,
     os::fd::{AsFd, BorrowedFd, OwnedFd},
-    path::PathBuf,
+    path::{Path, PathBuf},
 };
 
 use anyhow::Context;
@@ -46,13 +46,21 @@ pub struct DataTar {
     tar: tar::Builder<std::io::BufWriter<std::fs::File>>,
 }
 impl DataTar {
-    pub fn add_dir(&mut self, path: &str) -> std::io::Result<()> {
+    pub fn add_dir(&mut self, path: &Path) -> std::io::Result<()> {
         let mut hdr = tar::Header::new_gnu();
-        hdr.set_mode(0o555);
+        hdr.set_mode(0o755);
         hdr.set_entry_type(tar::EntryType::Directory);
         self.tar.append_data(&mut hdr, path, std::io::empty())
     }
-    pub fn add_blob_data(&mut self, path: &str, data: &Digest) -> std::io::Result<()> {
+    pub fn add_file(&mut self, path: &Path, data: &[u8]) -> std::io::Result<()> {
+        let mut hdr = tar::Header::new_gnu();
+        hdr.set_mode(0o644);
+        hdr.set_size(data.len() as u64);
+        hdr.set_entry_type(tar::EntryType::Regular);
+        self.tar.append_data(&mut hdr, path, data)
+    }
+
+    pub fn add_blob_data(&mut self, path: &Path, data: &Digest) -> std::io::Result<()> {
         let mut hdr = tar::Header::new_gnu();
         hdr.set_mode(0o777);
         hdr.set_entry_type(tar::EntryType::Symlink);
@@ -86,7 +94,7 @@ impl DataTar {
     }
     pub fn add_blob_data_seq<'a>(
         &mut self,
-        base_path: &str,
+        base_path: &Path,
         ext: &str,
         data: impl IntoIterator<Item = &'a Digest>,
     ) -> std::io::Result<()> {
@@ -140,7 +148,7 @@ impl DataTar {
     }
     pub fn add_message_info_seq(
         &mut self,
-        base_path: &str,
+        base_path: &Path,
         ext: &str,
         data: &[crate::http_client::MessageInfo],
     ) -> std::io::Result<()> {

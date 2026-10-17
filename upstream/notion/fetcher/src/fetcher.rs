@@ -1397,7 +1397,7 @@ impl Fetcher {
             "load-cached-page-chunk-v2/{seq:08x}_{page_id}"
         );
         self.data_tar
-            .add_message_info_seq(&self.path_buf, "json", &msg_ids)?;
+            .add_message_info_seq(self.path_buf.as_ref(), "json", &msg_ids)?;
 
         r.info.status.content = true;
         r.state.status.content = VisitStatus::Fetched;
@@ -1472,7 +1472,7 @@ impl Fetcher {
             qc.collection_view_id
         );
         self.data_tar.add_message_info_seq(
-            &self.path_buf,
+            self.path_buf.as_ref(),
             "json",
             std::slice::from_ref(&msg_id),
         )?;
@@ -1549,7 +1549,7 @@ impl Fetcher {
         self.path_buf.clear();
         let _ = std::write!(&mut self.path_buf, "sync-record-values-main/{seq:08x}");
         self.data_tar
-            .add_message_info_seq(&self.path_buf, "json", &msg_ids)?;
+            .add_message_info_seq(self.path_buf.as_ref(), "json", &msg_ids)?;
 
         for v in val.iter() {
             v.update_state((), &mut self.info, vis);

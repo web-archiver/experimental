@@ -114,7 +114,7 @@ pub struct Url {
     url: Arc<url::Url>,
 }
 impl Url {
-    pub fn from_str(s: &str) -> anyhow::Result<Self> {
+    pub fn parse(s: &str) -> anyhow::Result<Self> {
         Ok(Self {
             uri: http::Uri::from_str(s)?,
             url: Arc::new(url::Url::from_str(s)?),
@@ -138,6 +138,9 @@ impl Url {
             uri: http::Uri::from_str(url.as_str())?,
             url,
         })
+    }
+    pub fn as_url(&self) -> &url::Url {
+        &self.url
     }
 }
 

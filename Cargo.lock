@@ -2503,6 +2503,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "webar-upstream-nmbxd-fetcher"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "http",
+ "indicatif",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-indicatif",
+ "url",
+ "uuid",
+ "webar-core",
+ "webar-http-lib",
+]
+
+[[package]]
 name = "webar-upstream-notion-core"
 version = "0.1.0"
 

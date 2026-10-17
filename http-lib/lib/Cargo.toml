@@ -58,7 +58,7 @@ cookie_store = { version = "0.22.1", default-features = false, features = [
   "public_suffix",
   "preserve_order",
 ] }
-url = "2.5.8"
+url.workspace = true
 brotli = "8.0.4"
 flate2 = "1.1.9"
 zstd = "0.13.3"
