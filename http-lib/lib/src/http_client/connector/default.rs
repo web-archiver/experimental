@@ -306,13 +306,17 @@ impl std::future::Future for DefaultFuture {
 #[derive(Clone)]
 pub struct DefaultConnector(Arc<uri_parser::UriParseService<Inner>>);
 impl DefaultConnector {
-    fn new_inner(root: BorrowedFd<'_>, base: BaseConnector) -> anyhow::Result<Self> {
+    fn new_inner(
+        root: BorrowedFd<'_>,
+        span: tracing::Span,
+        base: BaseConnector,
+    ) -> anyhow::Result<Self> {
         let inner = ServiceBuilder::new(base)
             .once_layer(https::MaybeHttpsLayer::new(root, true)?)
             .once_layer(capture::CaptureLayer::new(
                 &webar_http_lib_core::fetch::connection::TLS_LOG_FILES,
             ))
-            .once_layer(super::tracing::TracingLayer::new())
+            .once_layer(super::tracing::TracingLayer::new(span))
             .once_layer(tokio_io::TokioIoLayer::new())
             .once_layer(uri_parser::UriParseLayer)
             .build();
@@ -321,6 +325,7 @@ impl DefaultConnector {
     pub(crate) fn new_direct(
         root: BorrowedFd<'_>,
         id_generator: crate::local_id::IdGenerator,
+        span: tracing::Span,
         direct_connector: webar_net_direct_conn::tcp::Connector,
     ) -> anyhow::Result<Self> {
         let base = ServiceBuilder::new(direct_connector)
@@ -331,11 +336,12 @@ impl DefaultConnector {
             )?)
             .once_layer(tcp_log::TcpLogLayer::new())
             .build();
-        Self::new_inner(root, BaseConnector::TcpDirect(base))
+        Self::new_inner(root, span, BaseConnector::TcpDirect(base))
     }
     pub(crate) fn new_captured(
         root: BorrowedFd<'_>,
         id_generator: crate::local_id::IdGenerator,
+        span: tracing::Span,
         connector: webar_net_pktcap_conn::client::Connector,
     ) -> anyhow::Result<Self> {
         let base = ServiceBuilder::new(webar_net_pktcap_conn::client::TcpConnector::new(connector))
@@ -346,11 +352,12 @@ impl DefaultConnector {
             )?)
             .once_layer(tcp_log::TcpLogLayer::new())
             .build();
-        Self::new_inner(root, BaseConnector::TcpCaptured(base))
+        Self::new_inner(root, span, BaseConnector::TcpCaptured(base))
     }
     pub(crate) fn new_proxy_captured(
         root: BorrowedFd<'_>,
         id_generator: crate::local_id::IdGenerator,
+        span: tracing::Span,
         trans: StreamTunConnector,
     ) -> anyhow::Result<Self> {
         let base = ServiceBuilder::new(trans.0)
@@ -363,10 +370,10 @@ impl DefaultConnector {
                 &webar_http_lib_core::fetch::connection::PROXY_LOG_FILES,
             ))
             .build();
-        Self::new_inner(root, BaseConnector::HttpTunnel(base))
+        Self::new_inner(root, span, BaseConnector::HttpTunnel(base))
     }
-    pub(crate) fn new_null(root: BorrowedFd<'_>) -> anyhow::Result<Self> {
-        Self::new_inner(root, BaseConnector::Null)
+    pub(crate) fn new_null(root: BorrowedFd<'_>, span: tracing::Span) -> anyhow::Result<Self> {
+        Self::new_inner(root, span, BaseConnector::Null)
     }
 }
 

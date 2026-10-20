@@ -240,14 +240,16 @@ impl<'a> CSPreUnshare<'a> {
         self,
         root: BorrowedFd<'_>,
         id_generator: local_id::IdGenerator,
+        span: tracing::Span,
     ) -> anyhow::Result<http_client::DefaultConnector> {
         match self {
             Self::TcpDirect(con) => {
-                http_client::DefaultConnector::new_direct(root, id_generator, con)
+                http_client::DefaultConnector::new_direct(root, id_generator, span, con)
             }
             Self::TcpCaptured(con) => http_client::DefaultConnector::new_captured(
                 root,
                 id_generator,
+                span,
                 webar_net_pktcap_conn::client::Connector::new(
                     webar_net_pktcap_conn::client::Client::new(con)?,
                 ),
@@ -255,9 +257,10 @@ impl<'a> CSPreUnshare<'a> {
             Self::HttpTunnel(sock) => http_client::DefaultConnector::new_proxy_captured(
                 root,
                 id_generator,
+                span,
                 sock.into_trans(),
             ),
-            Self::Null => http_client::DefaultConnector::new_null(root),
+            Self::Null => http_client::DefaultConnector::new_null(root, span),
         }
     }
 }
@@ -313,15 +316,15 @@ impl<V> ConnectorMap<V> {
             media_large: f(ClientId::MediaLarge, self.media_large)?,
         })
     }
-    fn try_zip<T, R, E>(
+    fn try_zipi<T, R, E>(
         self,
         other: ConnectorMap<T>,
-        f: impl Fn(V, T) -> Result<R, E>,
+        f: impl Fn(ClientId, V, T) -> Result<R, E>,
     ) -> Result<ConnectorMap<R>, E> {
         Ok(ConnectorMap {
-            primary: f(self.primary, other.primary)?,
-            media_small: f(self.media_small, other.media_small)?,
-            media_large: f(self.media_large, other.media_large)?,
+            primary: f(ClientId::Primary, self.primary, other.primary)?,
+            media_small: f(ClientId::MediaSmall, self.media_small, other.media_small)?,
+            media_large: f(ClientId::MediaLarge, self.media_large, other.media_large)?,
         })
     }
 }
@@ -370,14 +373,22 @@ fn run(
         data_writer::MakeWriter::new(root).context("failed to create object store factory")?;
     let id_generator = local_id::IdGenerator::new();
     let mut clients = connector_ctx
-        .try_zip(connectors, |ctx, connector| {
+        .try_zipi(connectors, |cid, ctx, connector| {
             http_client::Client::new(
                 ctx.root,
                 id_generator.clone(),
                 Arc::clone(&blob_store),
                 ctx.config.cookie,
                 ctx.config.req_per_sec,
-                connector.after_unshare(ctx.root, id_generator.clone())?,
+                connector.after_unshare(
+                    ctx.root,
+                    id_generator.clone(),
+                    match cid {
+                        ClientId::Primary => tracing::debug_span!("primary_connector"),
+                        ClientId::MediaSmall => tracing::debug_span!("media_small_connector"),
+                        ClientId::MediaLarge => tracing::debug_span!("media_large_connector"),
+                    },
+                )?,
             )
         })
         .context("failed to init http client")?;

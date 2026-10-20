@@ -1,6 +1,7 @@
 use std::future::Future;
 
 use anyhow::Result;
+use tracing::Instrument;
 use webar_core::service::{AsyncService, OnceLayer};
 
 use crate::http_client::connector::conn_meta::ConnectionMeta;
@@ -85,7 +86,7 @@ impl<C: ConnectionMeta> ConnectionMeta for TracedConnection<C> {
 #[pin_project::pin_project]
 pub struct TracingFuture<F> {
     #[pin]
-    future: F,
+    future: tracing::instrument::Instrumented<F>,
 }
 impl<F, R, E> Future for TracingFuture<F>
 where
@@ -97,48 +98,65 @@ where
         self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Self::Output> {
-        match self.project().future.poll(cx) {
+        let mut self_ = self.project();
+        match self_.future.as_mut().poll(cx) {
             std::task::Poll::Pending => std::task::Poll::Pending,
-            std::task::Poll::Ready(Ok(conn)) => std::task::Poll::Ready(Ok(TracedConnection {
-                span: tracing::info_span!(
-                    "connection",
-                    id = tracing::field::valuable(&conn.local_id())
-                ),
-                conn,
-            })),
+            std::task::Poll::Ready(Ok(conn)) => {
+                self_
+                    .future
+                    .span()
+                    .record("id", tracing::field::valuable(&conn.local_id()));
+                std::task::Poll::Ready(Ok(TracedConnection {
+                    span: self_.future.span().clone(),
+                    conn,
+                }))
+            }
             std::task::Poll::Ready(Err(e)) => std::task::Poll::Ready(Err(e)),
         }
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct TracingService<S>(S);
-impl<S, R> AsyncService<R> for TracingService<S>
+pub struct TracingService<S> {
+    conn_span: tracing::Span,
+    inner: S,
+}
+impl<S, C, E> AsyncService<&super::ConnectReq<'_>> for TracingService<S>
 where
-    S: AsyncService<R>,
-    S::Response: ConnectionMeta,
+    S: for<'r, 'l> AsyncService<&'r super::ConnectReq<'l>, Response = C, Error = E>,
+    C: ConnectionMeta,
 {
-    type Response = TracedConnection<S::Response>;
-    type Error = S::Error;
+    type Response = TracedConnection<C>;
+    type Error = E;
     fn call_async(
         &self,
-        req: R,
-    ) -> impl Future<Output = std::prelude::v1::Result<Self::Response, Self::Error>> + Send {
+        req: &super::ConnectReq<'_>,
+    ) -> impl Future<Output = Result<TracedConnection<C>, E>> + Send {
+        let span = tracing::debug_span!(
+            parent: self.conn_span.clone(),
+            "connect",
+            id = tracing::field::Empty,
+            host = req.host_str,
+            port = req.port
+        );
         TracingFuture {
-            future: self.0.call_async(req),
+            future: self.inner.call_async(req).instrument(span),
         }
     }
 }
 
-pub struct TracingLayer();
+pub struct TracingLayer(tracing::Span);
 impl TracingLayer {
-    pub(crate) fn new() -> Self {
-        Self()
+    pub(crate) fn new(span: tracing::Span) -> Self {
+        Self(span)
     }
 }
 impl<S> OnceLayer<S> for TracingLayer {
     type Service = TracingService<S>;
     fn layer_once(self, inner: S) -> Self::Service {
-        TracingService(inner)
+        TracingService {
+            conn_span: self.0,
+            inner,
+        }
     }
 }
