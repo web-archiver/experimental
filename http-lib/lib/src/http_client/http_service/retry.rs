@@ -30,19 +30,35 @@ fn parse_retry_after(h: &http::HeaderValue) -> Result<Duration, RetryAfterError>
     }
 }
 
-fn retry<D, Ext, E>(
+fn retry<D, Ext, E: std::error::Error + 'static>(
     backoff: &mut tower::retry::backoff::ExponentialBackoff,
     budget: &tower::retry::budget::TpsBudget,
     result: &Result<super::Response<D, Ext>, E>,
 ) -> Option<tokio::time::Sleep> {
     let should_retry = match result {
-        Ok(r) => match r.parts.status {
-            http::StatusCode::TOO_MANY_REQUESTS => true,
-            http::StatusCode::SERVICE_UNAVAILABLE => true,
-            s if s.is_server_error() => true,
-            _ => false,
-        },
-        Err(_) => true,
+        Ok(r) => {
+            let ret = match r.parts.status {
+                http::StatusCode::TOO_MANY_REQUESTS => true,
+                http::StatusCode::SERVICE_UNAVAILABLE => true,
+                s if s.is_server_error() => true,
+                _ => false,
+            };
+            if ret {
+                tracing::warn!(
+                    status = r.parts.status.as_u16(),
+                    "server returned {}",
+                    r.parts.status
+                );
+            }
+            ret
+        }
+        Err(e) => {
+            tracing::warn!(
+                err = e as &dyn std::error::Error,
+                "requrest returned error: {e}"
+            );
+            true
+        }
     };
     if should_retry {
         match result.as_ref().ok().and_then(|r| {
@@ -98,7 +114,7 @@ impl<Req: Clone + Send, S, D, Ext> AsyncService<Req> for RetryService<S>
 where
     S: AsyncService<Req, Response = super::Response<D, Ext>> + Sync,
     S::Response: Send,
-    S::Error: Send,
+    S::Error: std::error::Error + Send + 'static,
 {
     type Response = S::Response;
     type Error = S::Error;
