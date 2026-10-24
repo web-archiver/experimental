@@ -1,6 +1,6 @@
 use std::{convert::Infallible, os::fd::BorrowedFd, sync::Arc};
 
-use webar_core::service::Service;
+use webar_core::service::AsyncService;
 
 #[derive(Debug, Clone)]
 pub struct ReqBody(Option<bytes::Bytes>);
@@ -103,7 +103,7 @@ pub(crate) type DefaultReq = Request<ReqBody>;
 pub(crate) type DefaultResponse = Response<save_body::SavedData<Vec<u8>>, record::RecordExtra>;
 
 #[derive(Clone)]
-pub(crate) struct DefaultService<C>(DefaultInner<C>);
+pub(crate) struct DefaultService<C>(Arc<DefaultInner<C>>);
 impl<C> DefaultService<C> {
     pub(crate) fn new(
         root: BorrowedFd<'_>,
@@ -137,17 +137,20 @@ impl<C> DefaultService<C> {
                 .once_layer(id::RequestIdLayer::new(id_generator))
                 .once_layer(limit::LimitLayer::new(req_per_sec))
                 .build();
-        Ok(Self(inner))
+        Ok(Self(Arc::new(inner)))
     }
 }
-impl<C> Service<DefaultReq> for DefaultService<C>
+impl<C> AsyncService<DefaultReq> for DefaultService<C>
 where
     C: hyper_util::client::legacy::connect::Connect + Clone + Send + Sync + 'static,
 {
-    type Response = <DefaultInner<C> as webar_core::service::Service<DefaultReq>>::Response;
-    type Error = <DefaultInner<C> as webar_core::service::Service<DefaultReq>>::Error;
-    type Future = <DefaultInner<C> as webar_core::service::Service<DefaultReq>>::Future;
-    fn call(&self, req: DefaultReq) -> Self::Future {
-        self.0.call(req)
+    type Response = <DefaultInner<C> as webar_core::service::AsyncService<DefaultReq>>::Response;
+    type Error = <DefaultInner<C> as webar_core::service::AsyncService<DefaultReq>>::Error;
+    fn call_async(
+        &self,
+        req: DefaultReq,
+    ) -> impl std::prelude::rust_2024::Future<Output = Result<Self::Response, Self::Error>> + Send
+    {
+        self.0.call_async(req)
     }
 }

@@ -14,7 +14,7 @@ use tracing_indicatif::span_ext::IndicatifSpanExt;
 
 use webar_core::{
     codec::gcbor::ToGCbor,
-    service::{OnceLayer, Service},
+    service::{AsyncService, OnceLayer, Service},
     time::Timestamp,
 };
 
@@ -44,7 +44,8 @@ static_style!(SPINNER_STYLE, SPINNER_TEMPLATE);
 #[derive(Debug, Clone, ToGCbor)]
 pub struct Timing {
     pub start: Timestamp,
-    pub sent_header: Timestamp,
+    #[gcbor(omissible)]
+    pub sent_header: Option<Timestamp>,
     #[gcbor(omissible)]
     pub sent_body: Option<Timestamp>,
     pub recv_header: Timestamp,
@@ -95,7 +96,7 @@ pub struct TimingService<D, S> {
     inner: S,
     _phantom: PhantomData<fn() -> D>,
 }
-impl<B, D, S> Service<super::MessageReq<super::ReqBody>> for TimingService<D, S>
+impl<B, D, S> AsyncService<super::MessageReq<super::ReqBody>> for TimingService<D, S>
 where
     S: Service<http::Request<TimedBody>, Response = http::Response<B>>,
     S::Future: Send + Sync + 'static,
@@ -104,12 +105,12 @@ where
 {
     type Response = super::Response<D, Timing>;
     type Error = Error<S::Error, B::Error>;
-    type Future = Pin<
-        Box<dyn std::future::Future<Output = Result<Self::Response, Self::Error>> + Send + Sync>,
-    >;
-    fn call(&self, req: super::MessageReq<super::ReqBody>) -> Self::Future {
+    fn call_async(
+        &self,
+        req: super::MessageReq<super::ReqBody>,
+    ) -> impl std::prelude::rust_2024::Future<Output = Result<Self::Response, Self::Error>> + Send
+    {
         let span = tracing::info_span!("message_timing", indicatif.pb_show = tracing::field::Empty);
-
         let sent_header = Arc::new(OnceLock::new());
         let sent_body = Arc::new(OnceLock::new());
 
@@ -127,64 +128,63 @@ where
             )
         });
         let start_ts = Timestamp::now();
-        Box::pin(
-            async move {
-                let (parts, body) = fut.await.map_err(Error::Request)?.into_parts();
-                let recv_header = Timestamp::now();
 
-                let span = tracing::Span::current();
-                span.pb_set_message("receiving body");
-                match body.size_hint().upper() {
-                    Some(l) => {
-                        span.pb_set_length(l);
-                        span.pb_set_style(&BAR_STYLE);
+        async move {
+            let (parts, body) = fut.await.map_err(Error::Request)?.into_parts();
+            let recv_header = Timestamp::now();
+
+            let span = tracing::Span::current();
+            span.pb_set_message("receiving body");
+            match body.size_hint().upper() {
+                Some(l) => {
+                    span.pb_set_length(l);
+                    span.pb_set_style(&BAR_STYLE);
+                }
+                None => span.pb_set_style(&SPINNER_STYLE),
+            };
+            let mut body_buf = body
+                .size_hint()
+                .upper()
+                .map_or_else(Vec::new, |l| Vec::with_capacity(l as usize));
+            let mut body = std::pin::pin!(body);
+            let mut has_trailers = false;
+            let mut trailers = HeaderMap::new();
+            while let Some(r) = std::future::poll_fn(|ctx| body.as_mut().poll_frame(ctx)).await {
+                match r.map_err(Error::RecvBody)?.into_data() {
+                    Ok(mut d) => {
+                        span.pb_inc(d.remaining() as u64);
+                        while d.has_remaining() {
+                            let c = d.chunk();
+                            body_buf.extend_from_slice(c);
+                            d.advance(c.len());
+                        }
                     }
-                    None => span.pb_set_style(&SPINNER_STYLE),
-                };
-                let mut body_buf = body
-                    .size_hint()
-                    .upper()
-                    .map_or_else(Vec::new, |l| Vec::with_capacity(l as usize));
-                let mut body = std::pin::pin!(body);
-                let mut has_trailers = false;
-                let mut trailers = HeaderMap::new();
-                while let Some(r) = std::future::poll_fn(|ctx| body.as_mut().poll_frame(ctx)).await
-                {
-                    match r.map_err(Error::RecvBody)?.into_data() {
-                        Ok(mut d) => {
-                            span.pb_inc(d.remaining() as u64);
-                            while d.has_remaining() {
-                                let c = d.chunk();
-                                body_buf.extend_from_slice(c);
-                                d.advance(c.len());
-                            }
-                        }
-                        Err(e) => {
-                            has_trailers = true;
-                            trailers.extend(match e.into_trailers() {
-                                Ok(t) => t.into_iter(),
-                                Err(_) => unreachable!(),
-                            });
-                        }
+                    Err(e) => {
+                        has_trailers = true;
+                        trailers.extend(match e.into_trailers() {
+                            Ok(t) => t.into_iter(),
+                            Err(_) => unreachable!(),
+                        });
                     }
                 }
-                let recv_body = Timestamp::now();
-
-                Ok(super::Response {
-                    parts,
-                    data: D::from(body_buf),
-                    trailers: if has_trailers { Some(trailers) } else { None },
-                    extra: Timing {
-                        start: start_ts,
-                        sent_header: *sent_header.wait(),
-                        sent_body: *sent_body.wait(),
-                        recv_header,
-                        recv_body,
-                    },
-                })
             }
-            .instrument(span),
-        )
+
+            let recv_body = Timestamp::now();
+
+            Ok(super::Response {
+                parts,
+                data: D::from(body_buf),
+                trailers: if has_trailers { Some(trailers) } else { None },
+                extra: Timing {
+                    start: start_ts,
+                    sent_header: sent_header.get().copied(),
+                    sent_body: sent_body.get().copied().flatten(),
+                    recv_header,
+                    recv_body,
+                },
+            })
+        }
+        .instrument(span)
     }
 }
 

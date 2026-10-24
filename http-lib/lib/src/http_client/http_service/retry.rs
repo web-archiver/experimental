@@ -1,11 +1,11 @@
-use std::{sync::Arc, task::Poll, time::Duration};
+use std::time::Duration;
 
 use tower::retry::{
     backoff::{Backoff, MakeBackoff},
     budget::Budget,
 };
 
-use webar_core::service::{OnceLayer, Service};
+use webar_core::service::{AsyncService, OnceLayer};
 
 #[derive(Debug, thiserror::Error)]
 enum RetryAfterError {
@@ -30,141 +30,100 @@ fn parse_retry_after(h: &http::HeaderValue) -> Result<Duration, RetryAfterError>
     }
 }
 
-#[derive(Debug, Clone)]
-struct RetryPolicy {
-    backoff: tower::retry::backoff::ExponentialBackoff,
-    budget: Arc<tower::retry::budget::TpsBudget>,
-}
-impl RetryPolicy {
-    fn retry<D, Ext, E>(
-        &mut self,
-        result: &Result<super::Response<D, Ext>, E>,
-    ) -> Option<tokio::time::Sleep> {
-        let should_retry = match result {
-            Ok(r) => match r.parts.status {
-                http::StatusCode::TOO_MANY_REQUESTS => true,
-                http::StatusCode::SERVICE_UNAVAILABLE => true,
-                s if s.is_server_error() => true,
-                _ => false,
-            },
-            Err(_) => true,
-        };
-        if should_retry {
-            match result.as_ref().ok().and_then(|r| {
-                let hdr = r.parts.headers.get(http::header::RETRY_AFTER)?;
-                match parse_retry_after(hdr) {
-                    Ok(v) if v.is_zero() => None,
-                    Ok(v) => Some(v),
-                    Err(e) => {
-                        tracing::error!(
-                            err = &e as &dyn std::error::Error,
-                            "failed to parse retry-after header {}: {e}",
-                            hdr.as_bytes().escape_ascii()
-                        );
-                        None
-                    }
-                }
-            }) {
-                Some(d) => {
-                    tracing::info!(
-                        duration_secs = tracing::field::valuable(&d.as_secs()),
-                        "received http 429, retry after {} seconds",
-                        d.as_secs()
+fn retry<D, Ext, E>(
+    backoff: &mut tower::retry::backoff::ExponentialBackoff,
+    budget: &tower::retry::budget::TpsBudget,
+    result: &Result<super::Response<D, Ext>, E>,
+) -> Option<tokio::time::Sleep> {
+    let should_retry = match result {
+        Ok(r) => match r.parts.status {
+            http::StatusCode::TOO_MANY_REQUESTS => true,
+            http::StatusCode::SERVICE_UNAVAILABLE => true,
+            s if s.is_server_error() => true,
+            _ => false,
+        },
+        Err(_) => true,
+    };
+    if should_retry {
+        match result.as_ref().ok().and_then(|r| {
+            let hdr = r.parts.headers.get(http::header::RETRY_AFTER)?;
+            match parse_retry_after(hdr) {
+                Ok(v) if v.is_zero() => None,
+                Ok(v) => Some(v),
+                Err(e) => {
+                    tracing::error!(
+                        err = &e as &dyn std::error::Error,
+                        "failed to parse retry-after header {}: {e}",
+                        hdr.as_bytes().escape_ascii()
                     );
-                    Some(tokio::time::sleep(d))
-                }
-                None => {
-                    if self.budget.withdraw() {
-                        let r = self.backoff.next_backoff();
-                        tracing::info!(
-                            "retry request after {} seconds",
-                            r.deadline()
-                                .checked_duration_since(tokio::time::Instant::now())
-                                .map_or(0, |d| d.as_secs())
-                        );
-                        Some(r)
-                    } else {
-                        None
-                    }
+                    None
                 }
             }
-        } else {
-            self.budget.deposit();
-            None
-        }
-    }
-}
-
-#[pin_project::pin_project(project=StateProj)]
-enum State<Fut> {
-    Call(#[pin] Fut),
-    Sleep(#[pin] tokio::time::Sleep),
-}
-#[pin_project::pin_project]
-pub struct RetryFuture<S, Req, Fut> {
-    service: S,
-    request: Req,
-    policy: RetryPolicy,
-    #[pin]
-    state: State<Fut>,
-}
-impl<S, Req, D, Ext> std::future::Future for RetryFuture<S, Req, S::Future>
-where
-    Req: Clone,
-    S: Service<Req, Response = super::Response<D, Ext>>,
-{
-    type Output = Result<S::Response, S::Error>;
-    fn poll(
-        self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Self::Output> {
-        let mut self_ = self.project();
-        match self_.state.as_mut().project() {
-            StateProj::Call(fut) => match fut.poll(cx) {
-                Poll::Pending => Poll::Pending,
-                Poll::Ready(r) => match self_.policy.retry(&r) {
-                    Some(wait) => {
-                        self_.state.set(State::Sleep(wait));
-                        Poll::Pending
-                    }
-                    None => Poll::Ready(r),
-                },
-            },
-            StateProj::Sleep(fut) => match fut.poll(cx) {
-                Poll::Pending => Poll::Pending,
-                Poll::Ready(()) => {
-                    self_
-                        .state
-                        .set(State::Call(self_.service.call(self_.request.clone())));
-                    Poll::Pending
+        }) {
+            Some(d) => {
+                tracing::warn!(
+                    duration_secs = tracing::field::valuable(&d.as_secs()),
+                    "received http 429, retry after {} seconds",
+                    d.as_secs()
+                );
+                Some(tokio::time::sleep(d))
+            }
+            None => {
+                if budget.withdraw() {
+                    let r = backoff.next_backoff();
+                    tracing::warn!(
+                        "retry request after {} seconds",
+                        r.deadline()
+                            .checked_duration_since(tokio::time::Instant::now())
+                            .map_or(0, |d| d.as_secs())
+                    );
+                    Some(r)
+                } else {
+                    None
                 }
-            },
+            }
         }
+    } else {
+        budget.deposit();
+        None
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct RetryService<S> {
-    budget: Arc<tower::retry::budget::TpsBudget>,
+    budget: tower::retry::budget::TpsBudget,
     inner: S,
 }
-impl<Req: Clone, S, D, Ext> Service<Req> for RetryService<S>
+impl<Req: Clone + Send, S, D, Ext> AsyncService<Req> for RetryService<S>
 where
-    S: Service<Req, Response = super::Response<D, Ext>> + Clone,
+    S: AsyncService<Req, Response = super::Response<D, Ext>> + Sync,
+    S::Response: Send,
+    S::Error: Send,
 {
     type Response = S::Response;
     type Error = S::Error;
-    type Future = RetryFuture<S, Req, S::Future>;
-    #[inline]
-    fn call(&self, req: Req) -> Self::Future {
-        RetryFuture {
-            service: self.inner.clone(),
-            request: req.clone(),
-            policy: RetryPolicy {
-                backoff: tower::retry::backoff::ExponentialBackoffMaker::default().make_backoff(),
-                budget: Arc::clone(&self.budget),
-            },
-            state: State::Call(self.inner.call(req)),
+    async fn call_async(&self, req: Req) -> Result<Self::Response, Self::Error> {
+        let mut backoff = tower::retry::backoff::ExponentialBackoffMaker::new(
+            Duration::from_millis(50),
+            Duration::from_mins(2),
+            0.99,
+            Default::default(),
+        )
+        .unwrap()
+        .make_backoff();
+        let mut tries = 16u32;
+        loop {
+            let ret = self.inner.call_async(req.clone()).await;
+            match retry(&mut backoff, &self.budget, &ret) {
+                Some(s) => match tries.checked_sub(1) {
+                    Some(v) => {
+                        tries = v;
+                        s.await
+                    }
+                    None => break ret,
+                },
+                None => break ret,
+            }
         }
     }
 }
@@ -179,7 +138,7 @@ impl<S> OnceLayer<S> for RetryLayer {
     type Service = RetryService<S>;
     fn layer_once(self, inner: S) -> Self::Service {
         RetryService {
-            budget: Arc::new(Default::default()),
+            budget: Default::default(),
             inner,
         }
     }

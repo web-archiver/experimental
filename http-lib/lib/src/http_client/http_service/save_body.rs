@@ -2,7 +2,7 @@ use std::{future::Future, sync::Arc, task::Poll};
 
 use webar_core::{
     digest::Digest,
-    service::{OnceLayer, Service},
+    service::{AsyncService, OnceLayer},
 };
 use webar_http_lib_core::blob::Info;
 
@@ -76,13 +76,13 @@ impl<D: AsRef<[u8]>> AsRef<[u8]> for SavedData<D> {
 }
 
 #[pin_project::pin_project]
-pub struct SaveFuture<F, I> {
+pub struct SaveFuture<'a, F, I> {
     inferrer: I,
-    blob_store: Arc<BlobStore>,
+    blob_store: &'a BlobStore,
     #[pin]
     future: F,
 }
-impl<F, I, D, Ext, E> Future for SaveFuture<F, I>
+impl<'a, F, I, D, Ext, E> Future for SaveFuture<'a, F, I>
 where
     F: Future<Output = Result<super::Response<SavedData<D>, Ext>, E>>,
     D: AsRef<[u8]>,
@@ -120,20 +120,22 @@ pub struct SaveBody<I, S> {
     blob_store: Arc<BlobStore>,
     inner: S,
 }
-impl<S, I, D, Ext, R> Service<R> for SaveBody<I, S>
+impl<S, I, D, Ext, R> AsyncService<R> for SaveBody<I, S>
 where
-    S: Service<R, Response = super::Response<SavedData<D>, Ext>>,
+    S: AsyncService<R, Response = super::Response<SavedData<D>, Ext>>,
     D: AsRef<[u8]>,
-    I: InferInfo + Clone,
+    I: InferInfo + Clone + Send,
 {
     type Response = S::Response;
     type Error = Error<S::Error>;
-    type Future = SaveFuture<S::Future, I>;
-    fn call(&self, req: R) -> Self::Future {
+    fn call_async(
+        &self,
+        req: R,
+    ) -> impl Future<Output = Result<Self::Response, Self::Error>> + Send {
         SaveFuture {
             inferrer: self.inferrer.clone(),
-            blob_store: Arc::clone(&self.blob_store),
-            future: self.inner.call(req),
+            blob_store: &self.blob_store,
+            future: self.inner.call_async(req),
         }
     }
 }

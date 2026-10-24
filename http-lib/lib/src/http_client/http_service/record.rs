@@ -11,7 +11,7 @@ use bytes::Bytes;
 use webar_core::{
     codec::gcbor::{support, EncodedVal, SomeType, ToGCbor, ValueBuf},
     digest::Digest,
-    service::{OnceLayer, Service},
+    service::{AsyncService, OnceLayer},
 };
 use webar_http_lib_core::blob::Info as BlobInfo;
 use webar_utils_fs::create_file;
@@ -110,17 +110,17 @@ pub struct RecordExtra {
 }
 
 #[pin_project::pin_project]
-pub struct RecordFuture<F> {
+pub struct RecordFuture<'a, F> {
     request_id: id::RequestId,
     message_id: id::MessageId,
     request: EncodedVal<SomeType>,
     request_body: Option<RequestBody>,
-    blob_store: Arc<BlobStore>,
-    state: Arc<Mutex<State>>,
+    blob_store: &'a BlobStore,
+    state: &'a Mutex<State>,
     #[pin]
     fut: F,
 }
-impl<F> RecordFuture<F> {
+impl<'a, F> RecordFuture<'a, F> {
     fn record_info<E, D>(
         &self,
         resp: &super::Response<SavedData<D>, Timing>,
@@ -163,7 +163,7 @@ impl<F> RecordFuture<F> {
         Ok(())
     }
 }
-impl<F, D, E> Future for RecordFuture<F>
+impl<'a, F, D, E> Future for RecordFuture<'a, F>
 where
     F: Future<Output = Result<super::Response<SavedData<D>, Timing>, E>>,
 {
@@ -192,21 +192,24 @@ where
     }
 }
 
-#[derive(Clone)]
 pub struct RecordService<S> {
     blob_store: Arc<BlobStore>,
-    state: Arc<Mutex<State>>,
+    state: Mutex<State>,
     inner: S,
 }
-impl<S, D> Service<super::MessageReq<super::ReqBody>> for RecordService<S>
+impl<S, D> AsyncService<super::MessageReq<super::ReqBody>> for RecordService<S>
 where
-    S: Service<super::MessageReq<super::ReqBody>>,
-    S::Future: Future<Output = Result<super::Response<SavedData<D>, Timing>, S::Error>>,
+    S: AsyncService<
+        super::MessageReq<super::ReqBody>,
+        Response = super::Response<SavedData<D>, Timing>,
+    >,
 {
     type Response = super::Response<SavedData<D>, RecordExtra>;
     type Error = Error<S::Error>;
-    type Future = RecordFuture<S::Future>;
-    fn call(&self, mut req: super::MessageReq<super::ReqBody>) -> Self::Future {
+    fn call_async(
+        &self,
+        mut req: super::MessageReq<super::ReqBody>,
+    ) -> impl Future<Output = Result<Self::Response, Self::Error>> + Send {
         let mut buf = [0; uuid::fmt::Hyphenated::LENGTH];
 
         let req_id = uuid::Uuid::new_v8({
@@ -253,16 +256,16 @@ where
             message_id: req.message_id.clone(),
             request: EncodedVal::new(&req_info).untype(),
             request_body,
-            blob_store: Arc::clone(&self.blob_store),
-            state: Arc::clone(&self.state),
-            fut: self.inner.call(req),
+            blob_store: &self.blob_store,
+            state: &self.state,
+            fut: self.inner.call_async(req),
         }
     }
 }
 
 pub struct RecordLayer {
     blob_store: Arc<BlobStore>,
-    state: Arc<Mutex<State>>,
+    state: Mutex<State>,
 }
 impl RecordLayer {
     pub(crate) fn new(
@@ -275,10 +278,10 @@ impl RecordLayer {
         )?;
         Ok(Self {
             blob_store,
-            state: Arc::new(Mutex::new(State {
+            state: Mutex::new(State {
                 log_file: log_file.into(),
                 buf: ValueBuf::new(),
-            })),
+            }),
         })
     }
 }

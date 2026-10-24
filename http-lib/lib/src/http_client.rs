@@ -1,11 +1,9 @@
-use std::{
-    borrow::Borrow, future::Future, os::fd::BorrowedFd, str::FromStr, sync::Arc, task::Poll,
-};
+use std::{borrow::Borrow, os::fd::BorrowedFd, str::FromStr, sync::Arc};
 
 use anyhow::Result;
 use http::{HeaderName, HeaderValue, StatusCode};
 
-use webar_core::{codec::gcbor::GCborCodec, digest::Digest, service::Service};
+use webar_core::{codec::gcbor::GCborCodec, digest::Digest, service::AsyncService};
 
 use crate::blob::BlobStore;
 pub(crate) use connector::{DefaultConnector, StreamTunConnector};
@@ -23,7 +21,7 @@ mod service_util;
 #[derive(Debug, thiserror::Error)]
 enum InnerError {
     #[error("{0}")]
-    Inner(#[source] <Inner as Service<http_service::DefaultReq>>::Error),
+    Inner(#[source] <Inner as AsyncService<http_service::DefaultReq>>::Error),
 }
 #[derive(Debug, thiserror::Error)]
 #[error(transparent)]
@@ -92,19 +90,22 @@ impl ResponseBody<Vec<u8>> {
 
 type Inner = http_service::DefaultService<connector::DefaultConnector>;
 
-#[pin_project::pin_project]
-pub struct HttpFuture(#[pin] <Inner as Service<http_service::DefaultReq>>::Future);
-impl Future for HttpFuture {
-    type Output = Result<Response, HttpError>;
-    fn poll(
-        self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Self::Output> {
-        match self.project().0.poll(cx) {
-            Poll::Pending => Poll::Pending,
-            Poll::Ready(Ok(v)) => Poll::Ready(Ok(Response(v))),
-            Poll::Ready(Err(e)) => Poll::Ready(Err(HttpError(InnerError::Inner(e)))),
-        }
+#[derive(Debug, thiserror::Error)]
+#[error(transparent)]
+enum UrlParseErrorInner {
+    Uri(http::uri::InvalidUri),
+    Url(url::ParseError),
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error(transparent)]
+pub struct UrlParseError(UrlParseErrorInner);
+impl UrlParseError {
+    fn from_uri(e: http::uri::InvalidUri) -> Self {
+        Self(UrlParseErrorInner::Uri(e))
+    }
+    fn from_url(e: url::ParseError) -> Self {
+        Self(UrlParseErrorInner::Url(e))
     }
 }
 
@@ -114,33 +115,53 @@ pub struct Url {
     url: Arc<url::Url>,
 }
 impl Url {
-    pub fn parse(s: &str) -> anyhow::Result<Self> {
+    pub fn from_url(u: url::Url) -> Result<Self, UrlParseError> {
         Ok(Self {
-            uri: http::Uri::from_str(s)?,
-            url: Arc::new(url::Url::from_str(s)?),
+            uri: http::Uri::from_str(u.as_str()).map_err(UrlParseError::from_uri)?,
+            url: Arc::new(u),
         })
     }
-    pub fn from_static(s: &'static str) -> anyhow::Result<Self> {
+    pub fn parse(s: &str) -> Result<Self, UrlParseError> {
+        Ok(Self {
+            uri: http::Uri::from_str(s).map_err(UrlParseError::from_uri)?,
+            url: Arc::new(url::Url::from_str(s).map_err(UrlParseError::from_url)?),
+        })
+    }
+    pub fn from_static(s: &'static str) -> Result<Self, UrlParseError> {
         Ok(Self {
             uri: http::Uri::from_static(s),
-            url: Arc::new(url::Url::from_str(s)?),
+            url: Arc::new(url::Url::from_str(s).map_err(UrlParseError::from_url)?),
         })
     }
-    pub fn parse_with_params<I, K, V>(base: &str, params: I) -> anyhow::Result<Self>
+    pub fn parse_with_params<I, K, V>(base: &str, params: I) -> Result<Self, UrlParseError>
     where
         I: IntoIterator,
         I::Item: Borrow<(K, V)>,
         K: AsRef<str>,
         V: AsRef<str>,
     {
-        let url = Arc::new(url::Url::parse_with_params(base, params)?);
+        let url =
+            Arc::new(url::Url::parse_with_params(base, params).map_err(UrlParseError::from_url)?);
         Ok(Self {
-            uri: http::Uri::from_str(url.as_str())?,
+            uri: http::Uri::from_str(url.as_str()).map_err(UrlParseError::from_uri)?,
             url,
         })
     }
     pub fn as_url(&self) -> &url::Url {
         &self.url
+    }
+    pub fn host_header(
+        &self,
+    ) -> Result<Option<http::HeaderValue>, http::header::InvalidHeaderValue> {
+        let Some(host) = self.url.host_str() else {
+            return Ok(None);
+        };
+        match self.url.port() {
+            Some(p) => Ok(Some(http::HeaderValue::from_maybe_shared(format!(
+                "{host}:{p}",
+            ))?)),
+            None => Ok(Some(http::HeaderValue::from_str(host)?)),
+        }
     }
 }
 
@@ -194,7 +215,7 @@ impl Client {
         }
     }
     pub async fn execute(&mut self, req: Request) -> Result<Response, HttpError> {
-        match self.0.call(req.0).await {
+        match self.0.call_async(req.0).await {
             Ok(r) => Ok(Response(r)),
             Err(e) => Err(HttpError(InnerError::Inner(e))),
         }

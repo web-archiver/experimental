@@ -1,8 +1,8 @@
-use tracing::{instrument::Instrumented, Instrument};
+use tracing::Instrument;
 
 use webar_core::{
     codec::gcbor::GCborCodec,
-    service::{OnceLayer, Service},
+    service::{AsyncService, OnceLayer},
 };
 
 use crate::local_id;
@@ -33,17 +33,20 @@ pub struct RequestIdService<S> {
     id_generator: local_id::IdGenerator,
     inner: S,
 }
-impl<S, D> Service<super::Request<D>> for RequestIdService<S>
+impl<S, D> AsyncService<super::Request<D>> for RequestIdService<S>
 where
-    S: Service<WithRequestId<super::Request<D>>>,
+    S: AsyncService<WithRequestId<super::Request<D>>>,
 {
     type Response = S::Response;
     type Error = S::Error;
-    type Future = tracing::instrument::Instrumented<S::Future>;
-    fn call(&self, req: super::Request<D>) -> Self::Future {
+    fn call_async(
+        &self,
+        req: super::Request<D>,
+    ) -> impl std::prelude::rust_2024::Future<Output = Result<Self::Response, Self::Error>> + Send
+    {
         let request_id = RequestId(self.id_generator.generate());
         self.inner
-            .call(WithRequestId {
+            .call_async(WithRequestId {
                 request_id: request_id.clone(),
                 inner: req,
             })
@@ -95,17 +98,20 @@ pub struct MessageIdService<S> {
     id_generator: local_id::IdGenerator,
     inner: S,
 }
-impl<S, D> Service<WithRequestId<super::Request<D>>> for MessageIdService<S>
+impl<S, D> AsyncService<WithRequestId<super::Request<D>>> for MessageIdService<S>
 where
-    S: Service<super::MessageReq<D>>,
+    S: AsyncService<super::MessageReq<D>>,
 {
     type Response = S::Response;
     type Error = S::Error;
-    type Future = Instrumented<S::Future>;
-    fn call(&self, req: WithRequestId<super::Request<D>>) -> Self::Future {
+    fn call_async(
+        &self,
+        req: WithRequestId<super::Request<D>>,
+    ) -> impl std::prelude::rust_2024::Future<Output = Result<Self::Response, Self::Error>> + Send
+    {
         let message_id = MessageId(self.id_generator.generate());
         self.inner
-            .call(super::MessageReq {
+            .call_async(super::MessageReq {
                 request_id: req.request_id,
                 message_id: message_id.clone(),
                 url: req.inner.url,

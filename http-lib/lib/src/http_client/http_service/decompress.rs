@@ -1,6 +1,6 @@
 use std::{future::Future, task::Poll};
 
-use webar_core::service::{OnceLayer, Service};
+use webar_core::service::{AsyncService, OnceLayer};
 
 #[derive(Debug, thiserror::Error)]
 pub enum DecompressError<E> {
@@ -79,20 +79,22 @@ where
 
 #[derive(Debug, Clone)]
 pub struct Decompress<S>(S);
-impl<S, B, D, Ext> Service<super::MessageReq<B>> for Decompress<S>
+impl<S, B, D, Ext> AsyncService<super::MessageReq<B>> for Decompress<S>
 where
-    S: Service<super::MessageReq<B>, Response = super::Response<D, Ext>>,
+    S: AsyncService<super::MessageReq<B>, Response = super::Response<D, Ext>>,
     D: From<Vec<u8>> + AsRef<[u8]>,
 {
     type Response = super::Response<D, Ext>;
     type Error = DecompressError<S::Error>;
-    type Future = DecompressFuture<S::Future>;
-    fn call(&self, mut req: super::MessageReq<B>) -> Self::Future {
+    fn call_async(
+        &self,
+        mut req: super::MessageReq<B>,
+    ) -> impl Future<Output = Result<Self::Response, Self::Error>> + Send {
         req.parts.headers.insert(
             http::header::ACCEPT_ENCODING,
             const { http::HeaderValue::from_static("gzip, deflate, br, zstd") },
         );
-        DecompressFuture(self.0.call(req))
+        DecompressFuture(self.0.call_async(req))
     }
 }
 

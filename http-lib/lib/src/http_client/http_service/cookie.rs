@@ -4,7 +4,7 @@ use std::{
     task::Poll,
 };
 
-use webar_core::service::{OnceLayer, Service};
+use webar_core::service::{AsyncService, OnceLayer};
 
 #[derive(Debug, thiserror::Error)]
 enum CookieParseError {
@@ -23,13 +23,13 @@ fn parse_set_cookie<'a>(
 }
 #[derive(Debug)]
 #[pin_project::pin_project]
-pub struct CookieFuture<F> {
+pub struct CookieFuture<'a, F> {
     url: Arc<url::Url>,
-    store: Arc<RwLock<cookie_store::CookieStore>>,
+    store: &'a RwLock<cookie_store::CookieStore>,
     #[pin]
     inner: F,
 }
-impl<F, D, Ext, E> Future for CookieFuture<F>
+impl<'a, F, D, Ext, E> Future for CookieFuture<'a, F>
 where
     F: Future<Output = Result<super::Response<D, Ext>, E>>,
 {
@@ -96,14 +96,16 @@ impl<S> Cookie<S> {
         Ok(())
     }
 }
-impl<S, B, D, Ext> Service<super::MessageReq<B>> for Cookie<S>
+impl<S, B, D, Ext> AsyncService<super::MessageReq<B>> for Cookie<S>
 where
-    S: Service<super::MessageReq<B>, Response = super::Response<D, Ext>>,
+    S: AsyncService<super::MessageReq<B>, Response = super::Response<D, Ext>>,
 {
     type Response = S::Response;
     type Error = S::Error;
-    type Future = CookieFuture<S::Future>;
-    fn call(&self, mut req: super::MessageReq<B>) -> Self::Future {
+    fn call_async(
+        &self,
+        mut req: super::MessageReq<B>,
+    ) -> impl Future<Output = Result<Self::Response, Self::Error>> + Send {
         if let Err(e) = self.set_req_header(&req.url, &mut req.parts) {
             tracing::warn!(
                 url = req.url.as_str(),
@@ -113,8 +115,8 @@ where
         }
         CookieFuture {
             url: Arc::clone(&req.url),
-            store: Arc::clone(&self.store),
-            inner: self.inner.call(req),
+            store: &self.store,
+            inner: self.inner.call_async(req),
         }
     }
 }

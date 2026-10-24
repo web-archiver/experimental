@@ -1,6 +1,6 @@
 use http::{header, HeaderName, HeaderValue};
 
-use webar_core::service::{OnceLayer, Service};
+use webar_core::service::{AsyncService, OnceLayer, Service};
 
 const PRIORITY: HeaderName = HeaderName::from_static("priority");
 const SEC_CH_UA_MOBILE: HeaderName = HeaderName::from_static("sec-ch-ua-mobile");
@@ -57,6 +57,21 @@ where
     fn call(&self, mut req: super::MessageReq<B>) -> Self::Future {
         add_default_headers(&mut req.parts);
         self.inner.call(req)
+    }
+}
+impl<S, B> AsyncService<super::MessageReq<B>> for BrowserHeaders<S>
+where
+    S: AsyncService<super::MessageReq<B>>,
+{
+    type Response = S::Response;
+    type Error = S::Error;
+    fn call_async(
+        &self,
+        mut req: super::MessageReq<B>,
+    ) -> impl std::prelude::rust_2024::Future<Output = Result<Self::Response, Self::Error>> + Send
+    {
+        add_default_headers(&mut req.parts);
+        self.inner.call_async(req)
     }
 }
 

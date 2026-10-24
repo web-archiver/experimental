@@ -31,7 +31,7 @@ pub type Error = anyhow::Error;
 
 pub struct BlobStore {
     store: Store,
-    shared_index: Option<Index>,
+    shared_index: Option<Mutex<Index>>,
     tmp_dir: OwnedFd,
     incremental_info_fd: OwnedFd,
     incremental_info: Mutex<IncrementalInfo>,
@@ -39,7 +39,9 @@ pub struct BlobStore {
 impl BlobStore {
     pub(crate) fn new(root: BorrowedFd, shared_index_path: Option<&str>) -> Result<Self> {
         let shared_index = match shared_index_path {
-            Some(p) => Some(Index::open_ro(p).context("failed to open shared index")?),
+            Some(p) => Some(Mutex::new(
+                Index::open_ro(p).context("failed to open shared index")?,
+            )),
             None => None,
         };
 
@@ -96,7 +98,7 @@ impl BlobStore {
 
     pub fn add_data(&self, digest: &Digest, info: Info, data: &[u8]) -> Result<()> {
         match &self.shared_index {
-            Some(idx) if idx.exists(digest)? => {
+            Some(idx) if idx.lock().unwrap().exists(digest)? => {
                 self.incremental_info
                     .lock()
                     .unwrap()
@@ -116,7 +118,7 @@ impl BlobStore {
 
     pub fn add_file(&self, file: &BlobFile, info: Info) -> Result<Digest> {
         match &self.shared_index {
-            Some(idx) if idx.exists(&file.digest())? => {
+            Some(idx) if idx.lock().unwrap().exists(&file.digest())? => {
                 self.incremental_info
                     .lock()
                     .unwrap()

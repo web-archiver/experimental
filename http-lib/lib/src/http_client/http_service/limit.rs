@@ -1,23 +1,21 @@
 use std::{
-    future::Future,
-    sync::{atomic::AtomicI64, Arc, RwLock},
-    task::Poll,
+    sync::{atomic::AtomicI64, RwLock},
     time::Duration,
 };
 
 use tokio::time::Instant;
-use webar_core::service::{OnceLayer, Service};
+use webar_core::service::{AsyncService, OnceLayer};
 
 const DURATION: Duration = Duration::from_secs(1);
 
 #[derive(Debug)]
-struct State<S> {
+pub struct Limit<S> {
     remain: AtomicI64,
     count: i64,
     until: RwLock<Instant>,
     service: S,
 }
-impl<S> State<S> {
+impl<S> Limit<S> {
     fn on_request(&self) -> Result<(), tokio::time::Sleep> {
         let now = Instant::now();
         let mut until = *self.until.read().unwrap();
@@ -40,69 +38,18 @@ impl<S> State<S> {
         }
     }
 }
-
-#[pin_project::pin_project(project=FutProj)]
-enum InnerFuture<S, Req, Fut> {
-    Limited {
-        state: Arc<State<S>>,
-        request: Option<Req>,
-        #[pin]
-        sleep: tokio::time::Sleep,
-    },
-    Call(#[pin] Fut),
-}
-
-#[pin_project::pin_project]
-pub struct LimitFuture<S, Req, Fut>(#[pin] InnerFuture<S, Req, Fut>);
-impl<S, Req> Future for LimitFuture<S, Req, S::Future>
+impl<S, Req> AsyncService<Req> for Limit<S>
 where
-    S: Service<Req>,
-{
-    type Output = Result<S::Response, S::Error>;
-    fn poll(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> Poll<Self::Output> {
-        let mut inner = self.project().0;
-        match inner.as_mut().project() {
-            FutProj::Call(fut) => fut.poll(cx),
-            FutProj::Limited {
-                state,
-                request,
-                mut sleep,
-            } => match sleep.as_mut().poll(cx) {
-                Poll::Pending => Poll::Pending,
-                Poll::Ready(()) => match state.on_request() {
-                    Ok(()) => {
-                        let fut = state.service.call(request.take().unwrap());
-                        inner.set(InnerFuture::Call(fut));
-                        Poll::Pending
-                    }
-                    Err(s) => {
-                        sleep.set(s);
-                        Poll::Pending
-                    }
-                },
-            },
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct Limit<S>(Arc<State<S>>);
-impl<S, Req> Service<Req> for Limit<S>
-where
-    S: Service<Req> + Clone,
+    S: AsyncService<Req> + Sync,
+    Req: Send,
 {
     type Response = S::Response;
     type Error = S::Error;
-    type Future = LimitFuture<S, Req, S::Future>;
-    fn call(&self, req: Req) -> Self::Future {
-        match self.0.on_request() {
-            Ok(()) => LimitFuture(InnerFuture::Call(self.0.service.call(req))),
-            Err(sleep) => LimitFuture(InnerFuture::Limited {
-                state: Arc::clone(&self.0),
-                request: Some(req),
-                sleep,
-            }),
+    async fn call_async(&self, req: Req) -> Result<Self::Response, Self::Error> {
+        while let Err(e) = self.on_request() {
+            e.await;
         }
+        self.service.call_async(req).await
     }
 }
 
@@ -119,11 +66,11 @@ impl LimitLayer {
 impl<S> OnceLayer<S> for LimitLayer {
     type Service = Limit<S>;
     fn layer_once(self, inner: S) -> Self::Service {
-        Limit(Arc::new(State {
+        Limit {
             remain: AtomicI64::new(self.req_per_sec),
             count: self.req_per_sec,
             until: RwLock::new(Instant::now()),
             service: inner,
-        }))
+        }
     }
 }
