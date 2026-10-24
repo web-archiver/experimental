@@ -2,13 +2,18 @@ use std::{
     collections::{HashMap, HashSet, VecDeque, hash_map},
     ffi::CStr,
     fmt::{Debug, Write as _},
+    path::PathBuf,
+    sync::LazyLock,
 };
 
 use anyhow::Context;
 use serde::Serialize;
 use uuid::{Uuid, uuid};
 
-use webar_http_lib::http_client::MessageInfo;
+use webar_http_lib::{
+    error_field,
+    http_client::{self, MessageInfo},
+};
 
 use crate::{
     client::RecordPointer,
@@ -16,6 +21,8 @@ use crate::{
     types::WithRole,
     uuid_val::UuidVal,
 };
+
+mod debug_info;
 
 #[derive(Debug, Clone, Copy, Serialize, valuable::Valuable)]
 #[serde(rename_all = "snake_case")]
@@ -238,26 +245,82 @@ impl ObjectState {
     }
 }
 
-#[derive(Debug, Serialize)]
-pub(crate) struct GlobalInfo {
-    objects: HashMap<UuidVal, ObjectInfo>,
+/// resource: image, audio, video, links
+///
+/// Does not distinguish type to simplify design (no need to get schema when
+/// fetching collection entries), just fetch every link to notion image, video,
+/// audio domain
+#[derive(Debug, Serialize, valuable::Valuable)]
+struct ResourceStatus<S: valuable::Valuable> {
+    fetched: S,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, valuable::Valuable)]
+#[serde(rename_all = "snake_case")]
+enum ResourceSrc {
+    NotionUrl,
+    /// `attachment:` style path
+    NotionId,
+    External,
+    /// emoji or icon as utf-8 character, or data: url
+    Embedded,
+    /// invalid url
+    Invalid,
+    /// not resource url (e.g. mailto: urls)
+    Other,
+}
+impl ResourceSrc {
+    fn need_fetch(self) -> bool {
+        match self {
+            Self::NotionUrl | Self::NotionId => true,
+            Self::External | Self::Embedded | Self::Invalid | Self::Other => false,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, valuable::Valuable)]
+struct ResourceInfo {
+    src: ResourceSrc,
+    #[serde(skip)]
+    #[valuable(skip)]
+    url: Option<webar_http_lib::http_client::Url>,
+    status: ResourceStatus<bool>,
+}
+#[derive(Debug, Serialize, valuable::Valuable)]
+struct ResourceState {
+    table: TableType,
+    id: UuidVal,
+    status: ResourceStatus<VisitStatus>,
 }
 
 #[derive(Debug)]
+pub(crate) struct GlobalInfo {
+    objects: HashMap<UuidVal, ObjectInfo>,
+    resource: HashMap<lasso::Spur, ResourceInfo>,
+    urls: lasso::Rodeo,
+}
+
+#[derive(Debug, Serialize)]
 struct GetPage {
     page_id: Uuid,
 }
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 struct QueryCollection {
     collection_id: Uuid,
     collection_view_id: Uuid,
     space_id: Uuid,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 struct GetRecord {
     id: Uuid,
     table: TableType,
+}
+#[derive(Debug)]
+struct GetResource {
+    url: lasso::Spur,
+    table: TableType,
+    id: Uuid,
 }
 
 struct OpsQueue {
@@ -266,13 +329,22 @@ struct OpsQueue {
     get_record: Vec<GetRecord>,
     /// double buffer for [GetRecord] requests
     fetch_record: Vec<GetRecord>,
+    get_resource: VecDeque<GetResource>,
 }
 impl OpsQueue {
     fn is_empty(&self) -> bool {
-        self.get_page.is_empty()
-            && self.query_collection.is_empty()
-            && self.get_record.is_empty()
-            && self.fetch_record.is_empty()
+        let Self {
+            get_page,
+            query_collection,
+            get_record,
+            fetch_record,
+            get_resource,
+        } = self;
+        get_page.is_empty()
+            && query_collection.is_empty()
+            && get_record.is_empty()
+            && fetch_record.is_empty()
+            && get_resource.is_empty()
     }
 }
 
@@ -282,6 +354,7 @@ pub(crate) struct VisitConfig<'a> {
     pub(crate) fetch_mention: bool,
     pub(crate) follow_copied_from: bool,
     pub(crate) follow_parent: bool,
+    pub(super) fetch_resource: bool,
     allowed_spaces: &'a HashSet<Uuid>,
 }
 impl<'a> VisitConfig<'a> {
@@ -290,27 +363,31 @@ impl<'a> VisitConfig<'a> {
     }
 }
 
-#[derive(Serialize)]
 pub(crate) struct VisitState<'a> {
     pub(crate) config: VisitConfig<'a>,
     objects: HashMap<UuidVal, ObjectState>,
-    #[serde(skip)]
+    resource: HashMap<lasso::Spur, ResourceState>,
     queue: OpsQueue,
-}
-#[derive(Serialize)]
-struct DebugOutput<'a> {
-    global_info: &'a GlobalInfo,
-    visit_state: &'a VisitState<'a>,
 }
 
 pub(crate) trait ApiObject {
-    type Ptr;
-    fn update_state(&self, ptr: Self::Ptr, global_info: &mut GlobalInfo, state: &mut VisitState);
+    type Ptr<'a>;
+    fn update_state(
+        &self,
+        ptr: Self::Ptr<'_>,
+        global_info: &mut GlobalInfo,
+        state: &mut VisitState,
+    );
 }
 impl<T: ApiObject> ApiObject for Option<T> {
-    type Ptr = T::Ptr;
+    type Ptr<'a> = T::Ptr<'a>;
     #[inline]
-    fn update_state(&self, id: Self::Ptr, global_info: &mut GlobalInfo, state: &mut VisitState) {
+    fn update_state(
+        &self,
+        id: Self::Ptr<'_>,
+        global_info: &mut GlobalInfo,
+        state: &mut VisitState,
+    ) {
         if let Some(t) = self {
             T::update_state(t, id, global_info, state);
         }
@@ -394,6 +471,13 @@ struct AddedObj<'a, 'c, I, S> {
     info: &'a mut I,
     state: &'a mut S,
 }
+struct AddedResource<'a, 'c, I, S> {
+    url: lasso::Spur,
+    config: &'a VisitConfig<'c>,
+    ops_queue: &'a mut OpsQueue,
+    info: &'a mut I,
+    state: &'a mut S,
+}
 
 type AddObjResult<'a, 'c, I, S> = Result<AddedObj<'a, 'c, I, S>, Option<ObjectType>>;
 
@@ -402,6 +486,7 @@ impl<'c> VisitState<'c> {
         Self {
             config,
             objects: HashMap::new(),
+            resource: HashMap::new(),
             queue,
         }
     }
@@ -1168,6 +1253,144 @@ impl<'c> VisitState<'c> {
             }
         }
     }
+
+    fn add_resource<'a>(
+        &'a mut self,
+        global_info: &'a mut GlobalInfo,
+        url: &str,
+        table: TableType,
+        id: Uuid,
+    ) -> AddedResource<'a, 'c, ResourceInfo, ResourceState> {
+        let _span = tracing::info_span!("add_resource", url).entered();
+        let url_str = url;
+        let url = global_info.urls.get_or_intern(url_str);
+        let info = match global_info.resource.entry(url) {
+            hash_map::Entry::Occupied(o) => o.into_mut(),
+            hash_map::Entry::Vacant(v) => {
+                fn info_from_url(u: &str) -> anyhow::Result<ResourceInfo> {
+                    static SEGMENTOR: icu_segmenter::GraphemeClusterSegmenterBorrowed<'static> =
+                        icu_segmenter::GraphemeClusterSegmenter::new();
+                    static NOTION_BASE: LazyLock<url::Url> =
+                        LazyLock::new(|| url::Url::parse("https://www.notion.so/").unwrap());
+
+                    if u.starts_with("data:") || SEGMENTOR.segment_str(u).count() <= 2 {
+                        Ok(ResourceInfo {
+                            src: ResourceSrc::Embedded,
+                            url: None,
+                            status: ResourceStatus { fetched: true },
+                        })
+                    } else if u.starts_with("attachment:") {
+                        Ok(ResourceInfo {
+                            src: ResourceSrc::NotionId,
+                            url: None,
+                            status: ResourceStatus { fetched: false },
+                        })
+                    } else {
+                        match url::Url::parse(u) {
+                            Ok(url) => {
+                                if !matches!(url.scheme(), "http" | "https") {
+                                    return Ok(ResourceInfo {
+                                        src: ResourceSrc::Other,
+                                        url: None,
+                                        status: ResourceStatus { fetched: false },
+                                    });
+                                }
+                                let host = url.host_str().context("url missing host")?;
+                                if (host.ends_with(".amazonaws.com")
+                                    && url.path().starts_with("/secure.notion-static.com/"))
+                                    || host == "img.notionusercontent.com"
+                                    || host == "file.notion.com"
+                                {
+                                    Ok(ResourceInfo {
+                                        src: ResourceSrc::NotionUrl,
+                                        url: Some(http_client::Url::from_url(url)?),
+                                        status: ResourceStatus { fetched: false },
+                                    })
+                                } else {
+                                    Ok(ResourceInfo {
+                                        src: ResourceSrc::External,
+                                        url: Some(http_client::Url::from_url(url)?),
+                                        status: ResourceStatus { fetched: false },
+                                    })
+                                }
+                            }
+                            Err(url::ParseError::RelativeUrlWithoutBase) => {
+                                if u.starts_with("/images/") {
+                                    Ok(ResourceInfo {
+                                        src: ResourceSrc::NotionUrl,
+                                        url: Some(http_client::Url::from_url(
+                                            NOTION_BASE.join(u)?,
+                                        )?),
+                                        status: ResourceStatus { fetched: false },
+                                    })
+                                } else {
+                                    let mut url = NOTION_BASE.clone();
+                                    url.path_segments_mut().unwrap().extend(&["image", u]);
+                                    Ok(ResourceInfo {
+                                        src: ResourceSrc::NotionUrl,
+                                        url: Some(webar_http_lib::http_client::Url::from_url(url)?),
+                                        status: ResourceStatus { fetched: false },
+                                    })
+                                }
+                            }
+                            Err(e) => Err(anyhow::Error::new(e)),
+                        }
+                    }
+                }
+                match info_from_url(url_str) {
+                    Ok(i) => v.insert(i),
+                    Err(e) => {
+                        tracing::error!(err = error_field(&e), "failed to parse url: {e}");
+                        v.insert(ResourceInfo {
+                            src: ResourceSrc::Invalid,
+                            url: None,
+                            status: ResourceStatus { fetched: false },
+                        })
+                    }
+                }
+            }
+        };
+        let state = self.resource.entry(url).or_insert_with(|| ResourceState {
+            status: ResourceStatus {
+                fetched: VisitStatus::from_fetched(info.status.fetched),
+            },
+            table,
+            id: UuidVal(id),
+        });
+        AddedResource {
+            url,
+            config: &self.config,
+            ops_queue: &mut self.queue,
+            info,
+            state,
+        }
+    }
+    pub(crate) fn add_pending_resource(
+        &mut self,
+        global_info: &mut GlobalInfo,
+        url: &str,
+        table: TableType,
+        id: Uuid,
+        do_fetch: bool,
+    ) {
+        let r = self.add_resource(global_info, url, table, id);
+        if do_fetch && r.config.fetch_resource {
+            if r.info.src.need_fetch() {
+                r.state.status.fetched.on_enqueue(|| {
+                    r.ops_queue.get_resource.push_back(GetResource {
+                        url: r.url,
+                        table: r.state.table,
+                        id: r.state.id.0,
+                    });
+                });
+            } else {
+                r.state.status.fetched = VisitStatus::Ignored;
+            }
+        } else {
+            r.state.status.fetched.on_ignored();
+        }
+    }
+
     fn add_raw_json(&mut self, global_info: &mut GlobalInfo, json: &[u8]) {
         let Ok(uuids) = serde_json::from_slice::<crate::model::collect_uuids::CollectUuids>(json)
         else {
@@ -1184,12 +1407,12 @@ pub(crate) struct RecordPtr {
     pub(crate) space_id: Option<SpaceId>,
 }
 
-impl<T: ApiObject<Ptr = RecordPtr>> ApiObject for WithRole<T> {
-    type Ptr = (TableType, Uuid);
+impl<T: for<'a> ApiObject<Ptr<'a> = RecordPtr>> ApiObject for WithRole<T> {
+    type Ptr<'a> = (TableType, Uuid);
     #[inline]
     fn update_state(
         &self,
-        (table, id): Self::Ptr,
+        (table, id): Self::Ptr<'_>,
         global_info: &mut GlobalInfo,
         state: &mut VisitState,
     ) {
@@ -1225,8 +1448,8 @@ impl<T: ApiObject<Ptr = RecordPtr>> ApiObject for WithRole<T> {
     }
 }
 impl ApiObject for crate::types::RecordMap {
-    type Ptr = ();
-    fn update_state(&self, _: Self::Ptr, global_info: &mut GlobalInfo, state: &mut VisitState) {
+    type Ptr<'a> = ();
+    fn update_state(&self, _: Self::Ptr<'_>, global_info: &mut GlobalInfo, state: &mut VisitState) {
         let Self {
             automation,
             automation_action,
@@ -1264,8 +1487,8 @@ impl ApiObject for crate::types::RecordMap {
     }
 }
 impl ApiObject for crate::types::load_cached_page_chunk_v2::Response {
-    type Ptr = ();
-    fn update_state(&self, _: Self::Ptr, global_info: &mut GlobalInfo, state: &mut VisitState) {
+    type Ptr<'a> = ();
+    fn update_state(&self, _: Self::Ptr<'_>, global_info: &mut GlobalInfo, state: &mut VisitState) {
         let Self {
             cursors: _,
             record_map,
@@ -1280,8 +1503,8 @@ impl ApiObject for crate::types::load_cached_page_chunk_v2::Response {
     }
 }
 impl ApiObject for crate::types::query_collection::Response {
-    type Ptr = ();
-    fn update_state(&self, _: Self::Ptr, global_info: &mut GlobalInfo, state: &mut VisitState) {
+    type Ptr<'a> = ();
+    fn update_state(&self, _: Self::Ptr<'_>, global_info: &mut GlobalInfo, state: &mut VisitState) {
         let Self { result, record_map } = self;
         record_map.update_state((), global_info, state);
         result
@@ -1295,29 +1518,36 @@ impl ApiObject for crate::types::query_collection::Response {
     }
 }
 impl ApiObject for crate::types::sync_record_values_main::Response {
-    type Ptr = ();
-    fn update_state(&self, _: Self::Ptr, global_info: &mut GlobalInfo, state: &mut VisitState) {
+    type Ptr<'a> = ();
+    fn update_state(&self, _: Self::Ptr<'_>, global_info: &mut GlobalInfo, state: &mut VisitState) {
         let Self { record_map } = self;
         record_map.update_state((), global_info, state);
     }
 }
 impl<T: ApiObject> ApiObject for crate::client::Response<T> {
-    type Ptr = T::Ptr;
-    fn update_state(&self, id: Self::Ptr, global_info: &mut GlobalInfo, state: &mut VisitState) {
+    type Ptr<'a> = T::Ptr<'a>;
+    fn update_state(
+        &self,
+        id: Self::Ptr<'_>,
+        global_info: &mut GlobalInfo,
+        state: &mut VisitState,
+    ) {
         T::update_state(&self.data, id, global_info, state);
         state.add_raw_json(global_info, self.response.body());
     }
 }
 
-type ObjectData<'a> = crate::ObjectData<&'a MessageInfo, &'a [MessageInfo]>;
+type ObjectData<'a> = crate::ObjectData<&'a str, &'a MessageInfo, &'a [MessageInfo]>;
 
 pub struct Fetcher {
     client: crate::client::Client,
     data_tar: webar_http_lib::data_writer::DataTar,
     object_file: webar_http_lib::data_writer::CborFile,
     debug_file: webar_http_lib::data_writer::JsonSeqFile,
-    path_buf: String,
+    data_buf: webar_http_lib::data_writer::DataBuf,
+    path_buf: PathBuf,
     info: GlobalInfo,
+    fetch_seq: usize,
     seq: usize,
 }
 impl Fetcher {
@@ -1349,10 +1579,14 @@ impl Fetcher {
             data_tar,
             object_file,
             debug_file,
-            path_buf: String::new(),
+            path_buf: PathBuf::new(),
+            data_buf: webar_http_lib::data_writer::DataBuf::new(),
             info: GlobalInfo {
                 objects: HashMap::new(),
+                resource: HashMap::new(),
+                urls: lasso::Rodeo::new(),
             },
+            fetch_seq: 0,
             seq: 0,
         })
     }
@@ -1393,11 +1627,11 @@ impl Fetcher {
 
         self.path_buf.clear();
         let _ = std::write!(
-            &mut self.path_buf,
-            "load-cached-page-chunk-v2/{seq:08x}_{page_id}"
+            self.path_buf.as_mut_os_string(),
+            "unoffical-api-v3/load-cached-page-chunk-v2/{seq:08x}_{page_id}"
         );
         self.data_tar
-            .add_message_info_seq(self.path_buf.as_ref(), "json", &msg_ids)?;
+            .add_message_info_seq(&mut self.path_buf, "json", &msg_ids)?;
 
         r.info.status.content = true;
         r.state.status.content = VisitStatus::Fetched;
@@ -1467,12 +1701,12 @@ impl Fetcher {
 
         self.path_buf.clear();
         let _ = std::write!(
-            &mut self.path_buf,
-            "query-collection/{seq:08x}_{}",
+            self.path_buf.as_mut_os_string(),
+            "unoffical-api-v3/query-collection/{seq:08x}_{}",
             qc.collection_view_id
         );
         self.data_tar.add_message_info_seq(
-            self.path_buf.as_ref(),
+            &mut self.path_buf,
             "json",
             std::slice::from_ref(&msg_id),
         )?;
@@ -1547,9 +1781,12 @@ impl Fetcher {
         ))?;
 
         self.path_buf.clear();
-        let _ = std::write!(&mut self.path_buf, "sync-record-values-main/{seq:08x}");
+        let _ = std::write!(
+            self.path_buf.as_mut_os_string(),
+            "unoffical-api-v3/sync-record-values-main/{seq:08x}"
+        );
         self.data_tar
-            .add_message_info_seq(self.path_buf.as_ref(), "json", &msg_ids)?;
+            .add_message_info_seq(&mut self.path_buf, "json", &msg_ids)?;
 
         for v in val.iter() {
             v.update_state((), &mut self.info, vis);
@@ -1557,15 +1794,89 @@ impl Fetcher {
 
         Ok(())
     }
+    fn fetch_resource(&mut self, r: GetResource, vis: &mut VisitState) -> anyhow::Result<()> {
+        let url_str = self.info.urls.resolve(&r.url);
+        let _span = tracing::info_span!("fetch_resource", url = url_str).entered();
+
+        let seq = self.seq;
+        self.seq += 1;
+
+        let info = self.info.resource.get_mut(&r.url).unwrap();
+        let state = vis.resource.get_mut(&r.url).unwrap();
+
+        tracing::info!("fetching resource");
+
+        let (u, resp) = match self
+            .client
+            .fetch_resource(url_str, r.table, r.id, info.url.clone())
+        {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::error!(
+                    err = webar_http_lib::error_field(&e),
+                    "failed to fetch resource: {e:?}"
+                );
+                state.status.fetched = VisitStatus::Failed;
+                return Ok(());
+            }
+        };
+
+        self.object_file
+            .add(&ObjectData::NotionResource(crate::NotionResource {
+                resource: url_str,
+                fetch_url: u.as_url().as_str(),
+                response: &resp,
+            }))?;
+
+        info.status.fetched = true;
+        state.status.fetched = VisitStatus::Fetched;
+
+        self.path_buf.clear();
+        let _ = std::write!(self.path_buf.as_mut_os_string(), "resource/{seq:08x}");
+
+        self.path_buf.push("info.json");
+        #[derive(Serialize)]
+        struct ResourceInfo<'a> {
+            resource: &'a str,
+            url: &'a str,
+        }
+        let info_buf = self.data_buf.get_mut();
+        serde_json::to_writer_pretty(
+            &mut *info_buf,
+            &ResourceInfo {
+                resource: url_str,
+                url: u.as_url().as_str(),
+            },
+        )
+        .unwrap();
+        self.data_tar.add_file(self.path_buf.as_path(), info_buf)?;
+
+        self.path_buf.pop();
+        self.path_buf.push("data");
+        self.data_tar
+            .add_blob_data(self.path_buf.as_path(), resp.body_digest())?;
+
+        Ok(())
+    }
 
     fn exec_fetch(&mut self, config: VisitConfig<'_>, queue: OpsQueue) -> anyhow::Result<()> {
+        let visit_seq = self.fetch_seq;
+        self.fetch_seq += 1;
         let mut vis = VisitState::new(config, queue);
         while !vis.queue.is_empty() {
             while let Some(p) = vis.queue.get_page.pop_front() {
                 self.get_page_chunk(p.page_id, &mut vis)?;
+                self.debug_file.add(
+                    &mut self.data_buf,
+                    &debug_info::DebugInfo::new(&self.info, visit_seq, &vis),
+                )?;
             }
             while let Some(q) = vis.queue.query_collection.pop_front() {
                 self.query_collection_view(&q, &mut vis)?;
+                self.debug_file.add(
+                    &mut self.data_buf,
+                    &debug_info::DebugInfo::new(&self.info, visit_seq, &vis),
+                )?;
             }
             if !vis.queue.get_record.is_empty() {
                 std::mem::swap(&mut vis.queue.get_record, &mut vis.queue.fetch_record);
@@ -1575,13 +1886,20 @@ impl Fetcher {
                 queue.clear();
                 debug_assert!(vis.queue.fetch_record.is_empty());
                 vis.queue.fetch_record = queue;
+
+                self.debug_file.add(
+                    &mut self.data_buf,
+                    &debug_info::DebugInfo::new(&self.info, visit_seq, &vis),
+                )?;
+            }
+            while let Some(r) = vis.queue.get_resource.pop_front() {
+                self.fetch_resource(r, &mut vis)?;
+                self.debug_file.add(
+                    &mut self.data_buf,
+                    &debug_info::DebugInfo::new(&self.info, visit_seq, &vis),
+                )?;
             }
         }
-
-        self.debug_file.add(&DebugOutput {
-            global_info: &self.info,
-            visit_state: &vis,
-        })?;
 
         for (id, state) in vis.objects.iter() {
             if !state.is_final() {
@@ -1593,6 +1911,29 @@ impl Fetcher {
                     "unable to fetch object"
                 )
             }
+        }
+
+        {
+            let ext_res_buf = self.data_buf.get_mut();
+            for res in vis.resource.keys() {
+                let info = self.info.resource.get(res).unwrap();
+                match info.src {
+                    ResourceSrc::NotionId | ResourceSrc::NotionUrl | ResourceSrc::Embedded => {
+                        continue;
+                    }
+                    ResourceSrc::Invalid | ResourceSrc::Other | ResourceSrc::External => {
+                        ext_res_buf.extend_from_slice(self.info.urls.resolve(res).as_bytes());
+                        ext_res_buf.push(b'\n');
+                    }
+                }
+            }
+            self.path_buf.clear();
+            let _ = write!(
+                self.path_buf.as_mut_os_string(),
+                "lists/external-resource/{visit_seq:08x}.txt"
+            );
+            self.data_tar
+                .add_file(self.path_buf.as_path(), ext_res_buf)?;
         }
 
         Ok(())
@@ -1609,6 +1950,7 @@ impl Fetcher {
                 fetch_mention: false,
                 follow_copied_from: false,
                 follow_parent: false,
+                fetch_resource: true,
                 allowed_spaces,
             },
             OpsQueue {
@@ -1616,6 +1958,7 @@ impl Fetcher {
                 query_collection: VecDeque::new(),
                 get_record: Vec::new(),
                 fetch_record: Vec::new(),
+                get_resource: VecDeque::new(),
             },
         )
     }

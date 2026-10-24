@@ -160,7 +160,7 @@ impl Fetcher {
             "api/get-thread/{seq:08x}_{id}"
         );
         self.data_tar
-            .add_message_info_seq(self.path_buf.as_path(), "json", &resp_buf)?;
+            .add_message_info_seq(&mut self.path_buf, "json", &resp_buf)?;
 
         Ok(())
     }

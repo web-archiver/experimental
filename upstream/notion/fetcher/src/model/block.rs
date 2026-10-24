@@ -4,30 +4,12 @@ use uuid::Uuid;
 use crate::{
     fetcher::{ApiObject, GlobalInfo, ObjectId, OtherObjId, VisitState, merge_space_uuid},
     model::{
-        AutomationId, CopiedFromPointer, FileId, OtherId, SpaceId, UserId,
+        AutomationId, CopiedFromPointer, FileId, OtherId, ResourceUrl, SpaceId, UserId,
         rich_text::{IgnoredStr, RichText},
     },
 };
 
 use super::{EnumVal, Pointer, TableType};
-
-#[derive(Default)]
-pub(crate) enum MaybeRichText {
-    RichText(RichText<IgnoredStr>),
-    #[default]
-    Other,
-}
-impl<'de> serde::de::Deserialize<'de> for MaybeRichText {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        match RichText::deserialize(deserializer) {
-            Ok(r) => Ok(Self::RichText(r)),
-            Err(_) => Ok(Self::Other),
-        }
-    }
-}
 
 mk_enum_tag!(
     #[non_exhaustive]
@@ -88,7 +70,7 @@ impl super::NamedEnumTag for BlockType {
 #[derive(Default)]
 pub(crate) struct Properties {
     pub rich_text: Vec<RichText<IgnoredStr>>,
-    pub source: Option<String>,
+    pub source: Option<ResourceUrl>,
 }
 impl<'de> Deserialize<'de> for Properties {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
@@ -137,12 +119,18 @@ impl<'de> Deserialize<'de> for Properties {
     }
 }
 impl ApiObject for Properties {
-    type Ptr = ();
-    fn update_state(&self, _: Self::Ptr, global_info: &mut GlobalInfo, state: &mut VisitState) {
+    type Ptr<'a> = Uuid;
+    fn update_state(
+        &self,
+        ptr: Self::Ptr<'_>,
+        global_info: &mut GlobalInfo,
+        state: &mut VisitState,
+    ) {
         let Self { source, rich_text } = self;
         for txt in rich_text {
-            txt.update_state((), global_info, state);
+            txt.update_state((TableType::Block, ptr), global_info, state);
         }
+        source.add_pending(global_info, state, (TableType::Block, ptr), true);
     }
 }
 
@@ -158,8 +146,8 @@ struct Permission {
     parent_table: Option<EnumVal<TableType>>,
 }
 impl ApiObject for Permission {
-    type Ptr = ();
-    fn update_state(&self, _: Self::Ptr, global_info: &mut GlobalInfo, state: &mut VisitState) {
+    type Ptr<'a> = ();
+    fn update_state(&self, _: Self::Ptr<'_>, global_info: &mut GlobalInfo, state: &mut VisitState) {
         let Self {
             user_id,
             bot_id,
@@ -176,8 +164,8 @@ impl ApiObject for Permission {
 #[serde(transparent)]
 pub struct Permissions(Vec<Permission>);
 impl ApiObject for Permissions {
-    type Ptr = ();
-    fn update_state(&self, _: Self::Ptr, global_info: &mut GlobalInfo, state: &mut VisitState) {
+    type Ptr<'a> = ();
+    fn update_state(&self, _: Self::Ptr<'_>, global_info: &mut GlobalInfo, state: &mut VisitState) {
         for p in self.0.iter() {
             p.update_state((), global_info, state);
         }
@@ -216,10 +204,10 @@ pub struct BlockBase {
     discussions: Vec<Uuid>,
 }
 impl ApiObject for BlockBase {
-    type Ptr = ();
-    fn update_state(&self, _: Self::Ptr, global_info: &mut GlobalInfo, state: &mut VisitState) {
+    type Ptr<'a> = ();
+    fn update_state(&self, _: Self::Ptr<'_>, global_info: &mut GlobalInfo, state: &mut VisitState) {
         let Self {
-            id: _,
+            id,
             content,
             properties,
             space_id,
@@ -236,7 +224,7 @@ impl ApiObject for BlockBase {
         for cid in content {
             state.add_pending_record(global_info, *cid, *space_id, TableType::Block, true);
         }
-        properties.update_state((), global_info, state);
+        properties.update_state(*id, global_info, state);
         state.add_pending_obj_with_table_opt(
             global_info,
             *parent_id,
@@ -273,9 +261,9 @@ pub struct PageFormat {
     #[serde(default)]
     pub(crate) site_id: Option<OtherId>,
     #[serde(default)]
-    pub(crate) page_cover: Option<String>,
+    pub(crate) page_cover: Option<ResourceUrl>,
     #[serde(default)]
-    pub(crate) page_icon: Option<String>,
+    pub(crate) page_icon: Option<ResourceUrl>,
     #[serde(default)]
     pub(crate) copied_from_pointer: Option<CopiedFromPointer>,
 }
@@ -290,8 +278,8 @@ pub struct CollectionViewFormat {
     copied_from_pointer: Option<CopiedFromPointer>,
 }
 impl ApiObject for CollectionViewFormat {
-    type Ptr = ();
-    fn update_state(&self, _: Self::Ptr, global_info: &mut GlobalInfo, state: &mut VisitState) {
+    type Ptr<'a> = ();
+    fn update_state(&self, _: Self::Ptr<'_>, global_info: &mut GlobalInfo, state: &mut VisitState) {
         let Self {
             collection_pointer,
             copied_from_pointer,
@@ -310,15 +298,20 @@ pub struct CollectionViewPageFormat {
     #[serde(default)]
     collection_pointer: Option<Pointer>,
     #[serde(default)]
-    page_icon: Option<String>,
+    page_icon: Option<ResourceUrl>,
     #[serde(default)]
-    page_cover: Option<String>,
+    page_cover: Option<ResourceUrl>,
     #[serde(default)]
     copied_from_pointer: Option<CopiedFromPointer>,
 }
 impl ApiObject for CollectionViewPageFormat {
-    type Ptr = ();
-    fn update_state(&self, _: Self::Ptr, global_info: &mut GlobalInfo, state: &mut VisitState) {
+    type Ptr<'a> = &'a Uuid;
+    fn update_state(
+        &self,
+        ptr: Self::Ptr<'_>,
+        global_info: &mut GlobalInfo,
+        state: &mut VisitState,
+    ) {
         let Self {
             collection_pointer,
             page_icon,
@@ -329,6 +322,8 @@ impl ApiObject for CollectionViewPageFormat {
         collection_pointer.update_state((), global_info, state);
         copied_from_pointer.update_state((), global_info, state);
         site_id.add_ignored(global_info, state);
+        page_icon.add_pending(global_info, state, (TableType::Block, *ptr), true);
+        page_cover.add_pending(global_info, state, (TableType::Block, *ptr), true);
     }
 }
 
@@ -341,8 +336,8 @@ pub struct TableFormat {
     copied_from_pointer: Option<CopiedFromPointer>,
 }
 impl ApiObject for TableFormat {
-    type Ptr = ();
-    fn update_state(&self, _: Self::Ptr, global_info: &mut GlobalInfo, state: &mut VisitState) {
+    type Ptr<'a> = ();
+    fn update_state(&self, _: Self::Ptr<'_>, global_info: &mut GlobalInfo, state: &mut VisitState) {
         let Self {
             collection_pointer,
             copied_from_pointer,
@@ -363,13 +358,13 @@ pub struct OtherFormat {
     #[serde(default)]
     alias_pointer: Option<Pointer>,
     #[serde(default)]
-    page_cover: Option<String>,
+    page_cover: Option<ResourceUrl>,
     #[serde(default)]
-    page_icon: Option<String>,
+    page_icon: Option<ResourceUrl>,
     #[serde(default)]
-    bookmark_icon: Option<String>,
+    bookmark_icon: Option<ResourceUrl>,
     #[serde(default)]
-    bookmark_cover: Option<String>,
+    bookmark_cover: Option<ResourceUrl>,
     #[serde(default)]
     automation_id: Option<AutomationId>,
     #[serde(default)]
@@ -382,8 +377,13 @@ pub struct OtherFormat {
     bot_id: Option<OtherId>,
 }
 impl ApiObject for OtherFormat {
-    type Ptr = ();
-    fn update_state(&self, _: Self::Ptr, global_info: &mut GlobalInfo, state: &mut VisitState) {
+    type Ptr<'a> = &'a Uuid;
+    fn update_state(
+        &self,
+        ptr: Self::Ptr<'_>,
+        global_info: &mut GlobalInfo,
+        state: &mut VisitState,
+    ) {
         let Self {
             transclusion_reference_pointer,
             alias_pointer,
@@ -406,6 +406,10 @@ impl ApiObject for OtherFormat {
         bot_id.add_ignored(global_info, state);
         external_object_id.add_ignored(global_info, state);
         automation_id.add_pending(global_info, state, (), true);
+        bookmark_icon.add_pending(global_info, state, (TableType::Block, *ptr), true);
+        bookmark_cover.add_pending(global_info, state, (TableType::Block, *ptr), true);
+        page_cover.add_pending(global_info, state, (TableType::Block, *ptr), true);
+        page_icon.add_pending(global_info, state, (TableType::Block, *ptr), true);
     }
 }
 
@@ -473,8 +477,13 @@ impl Block {
     }
 }
 impl ApiObject for Block {
-    type Ptr = crate::fetcher::RecordPtr;
-    fn update_state(&self, ptr: Self::Ptr, global_info: &mut GlobalInfo, state: &mut VisitState) {
+    type Ptr<'a> = crate::fetcher::RecordPtr;
+    fn update_state(
+        &self,
+        ptr: Self::Ptr<'_>,
+        global_info: &mut GlobalInfo,
+        state: &mut VisitState,
+    ) {
         match self {
             Self::Page {
                 base,
@@ -492,6 +501,8 @@ impl ApiObject for Block {
                 copied_from_pointer.update_state((), global_info, state);
                 site_id.add_ignored(global_info, state);
                 permissions.update_state((), global_info, state);
+                page_cover.add_pending(global_info, state, (TableType::Block, base.id), true);
+                page_icon.add_pending(global_info, state, (TableType::Block, base.id), true);
             }
             Self::Table {
                 base,
@@ -568,7 +579,7 @@ impl ApiObject for Block {
                     TableType::Block,
                 );
                 base.update_state((), global_info, state);
-                format.update_state((), global_info, state);
+                format.update_state(&base.id, global_info, state);
                 state.add_pending_record_opt(
                     global_info,
                     *collection_id,
@@ -598,7 +609,7 @@ impl ApiObject for Block {
                     TableType::Block,
                 );
                 base.update_state((), global_info, state);
-                format.update_state((), global_info, state);
+                format.update_state(&base.id, global_info, state);
             }
         }
     }

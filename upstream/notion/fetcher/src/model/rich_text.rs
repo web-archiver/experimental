@@ -3,7 +3,10 @@ use std::marker::PhantomData;
 use serde::{Deserialize, de::IgnoredAny};
 use uuid::Uuid;
 
-use crate::{fetcher::ApiObject, model::TableType};
+use crate::{
+    fetcher::{ApiObject, ObjectId},
+    model::{CommentId, ResourceUrl, SpaceId, TableType, UserId},
+};
 
 use super::{EnumVal, NamedEnumTag};
 
@@ -36,12 +39,16 @@ impl<'a> From<&'a str> for IgnoredStr {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug)]
 #[non_exhaustive]
-pub enum SubDecoration {
+enum SubDecoration {
+    #[non_exhaustive]
+    Link {
+        link: ResourceUrl,
+    },
     #[non_exhaustive]
     Commented {
-        comment_id: Uuid,
+        comment_id: CommentId,
     },
     Other,
 }
@@ -87,10 +94,10 @@ impl<'de> Deserialize<'de> for SubDecoration {
                             Ok(SubDecoration::Other)
                         }
                         Ty::Link => {
-                            let IgnoredAny = seq
+                            let link = seq
                                 .next_element()?
                                 .ok_or_else(|| serde::de::Error::missing_field("link"))?;
-                            Ok(SubDecoration::Other)
+                            Ok(SubDecoration::Link { link })
                         }
                         Ty::Code => Ok(SubDecoration::Other),
                         Ty::Colored => {
@@ -125,15 +132,15 @@ impl<'de> Deserialize<'de> for SubDecoration {
 
 #[derive(Debug, PartialEq, Eq)]
 #[non_exhaustive]
-pub enum Mention {
+enum Mention {
     #[non_exhaustive]
     User {
-        user_id: Uuid,
+        user_id: UserId,
     },
     #[non_exhaustive]
     Page {
         page_id: Uuid,
-        space_id: Uuid,
+        space_id: SpaceId,
     },
     #[non_exhaustive]
     Date,
@@ -211,9 +218,10 @@ impl<'de> Deserialize<'de> for Mention {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug)]
 #[non_exhaustive]
-pub enum TextSpan<T> {
+#[allow(dead_code)]
+enum TextSpan<T> {
     #[non_exhaustive]
     Plain {
         text: T,
@@ -297,34 +305,38 @@ impl<'de, T: for<'a> From<&'a str>> Deserialize<'de> for TextSpan<T> {
     }
 }
 impl<T> ApiObject for TextSpan<T> {
-    type Ptr = ();
+    type Ptr<'a> = (TableType, Uuid);
     fn update_state(
         &self,
-        _: Self::Ptr,
+        (ty, id): Self::Ptr<'_>,
         global_info: &mut crate::fetcher::GlobalInfo,
         state: &mut crate::fetcher::VisitState,
     ) {
         match self {
             TextSpan::Plain {
                 text: _,
-                decorations: _,
-            } => (),
+                decorations,
+            } => {
+                for d in decorations {
+                    match d {
+                        SubDecoration::Link { link } => {
+                            link.add_pending(global_info, state, (ty, id), true);
+                        }
+                        SubDecoration::Commented { comment_id } => {
+                            comment_id.add_pending(global_info, state, (), true);
+                        }
+                        SubDecoration::Other => (),
+                    }
+                }
+            }
             TextSpan::Math => (),
             TextSpan::Mention(m) => match m {
                 Mention::User { user_id } => {
-                    state.add_pending_record(
-                        global_info,
-                        *user_id,
-                        None,
-                        TableType::NotionUser,
-                        state.config.fetch_mention,
-                    );
+                    user_id.add_pending(global_info, state, (), state.config.fetch_mention);
                 }
-                Mention::Page {
-                    page_id,
-                    space_id: _,
-                } => {
+                Mention::Page { page_id, space_id } => {
                     state.add_pending_page(global_info, *page_id, state.config.fetch_mention);
+                    space_id.add_pending(global_info, state, (), state.config.fetch_mention);
                 }
                 Mention::Date => (),
                 Mention::Eoi => (),
@@ -335,18 +347,26 @@ impl<T> ApiObject for TextSpan<T> {
     }
 }
 
-pub type RichText<T> = Vec<TextSpan<T>>;
+#[derive(Deserialize)]
+#[serde(bound(deserialize = "T: for<'a> From<&'a str>"))]
+#[serde(transparent)]
+pub struct RichText<T>(Vec<TextSpan<T>>);
+impl<T> Default for RichText<T> {
+    fn default() -> Self {
+        Self(Vec::new())
+    }
+}
 
 impl<T> ApiObject for RichText<T> {
-    type Ptr = ();
+    type Ptr<'a> = (TableType, Uuid);
     fn update_state(
         &self,
-        _: Self::Ptr,
+        ptr: Self::Ptr<'_>,
         global_info: &mut crate::fetcher::GlobalInfo,
         state: &mut crate::fetcher::VisitState,
     ) {
-        for s in self.iter() {
-            s.update_state((), global_info, state);
+        for s in self.0.iter() {
+            s.update_state(ptr, global_info, state);
         }
     }
 }

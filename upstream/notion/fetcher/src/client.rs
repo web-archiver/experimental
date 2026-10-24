@@ -1,3 +1,5 @@
+use std::{ops::Deref, sync::LazyLock};
+
 use anyhow::Context;
 
 use uuid::Uuid;
@@ -10,6 +12,7 @@ struct ApiEndpoints {
     get_page: Url,
     query_collection: Url,
     get_blocks: Url,
+    get_signed_file_urls: Url,
 }
 impl ApiEndpoints {
     fn new() -> Self {
@@ -23,6 +26,7 @@ impl ApiEndpoints {
             get_page: api_path!("loadCachedPageChunkV2"),
             query_collection: api_path!("queryCollection?src=change_group_limit"),
             get_blocks: api_path!("syncRecordValuesMain"),
+            get_signed_file_urls: api_path!("getSignedFileUrls"),
         }
     }
 }
@@ -52,21 +56,26 @@ impl RecordPointer {
     }
 }
 
+static ENDPOINTS: LazyLock<ApiEndpoints> = LazyLock::new(ApiEndpoints::new);
+
 pub struct Client {
-    endpoints: ApiEndpoints,
+    endpoints: &'static ApiEndpoints,
     runtime: tokio::runtime::Handle,
     api_client: webar_http_lib::http_client::Client,
+    resource_client: webar_http_lib::http_client::Client,
 }
 
 impl Client {
     pub fn new(
         runtime: &tokio::runtime::Handle,
         api_client: webar_http_lib::http_client::Client,
+        resource_client: webar_http_lib::http_client::Client,
     ) -> Self {
         Self {
-            endpoints: ApiEndpoints::new(),
+            endpoints: ENDPOINTS.deref(),
             runtime: runtime.clone(),
             api_client,
+            resource_client,
         }
     }
 
@@ -261,5 +270,78 @@ impl Client {
             ret_val.push(vals);
         }
         Ok((ret_msg, ret_val))
+    }
+
+    pub fn get_signed_file_url(
+        &mut self,
+        url: &str,
+        table: TableType,
+        id: Uuid,
+    ) -> anyhow::Result<crate::types::get_signed_file_urls::Response<String, 1>> {
+        use crate::types::get_signed_file_urls::*;
+        self.call_api_post(
+            self.endpoints.get_signed_file_urls.clone(),
+            no_map,
+            &crate::types::get_signed_file_urls::Request {
+                urls: [UrlRequest {
+                    url,
+                    permission_record: PermissionRecord { id, table },
+                }],
+            },
+        )
+        .map(|(_, r)| r.data)
+    }
+
+    fn get_resource(&mut self, url: Url) -> anyhow::Result<webar_http_lib::http_client::Response> {
+        let host = url
+            .host_header()
+            .context("invalid host")?
+            .context("missing host")?;
+        let req = self
+            .resource_client
+            .request(http::Method::GET, url)
+            .header(http::header::HOST, host)
+            .build(ReqBody::empty())
+            .unwrap();
+        Ok(self.runtime.block_on(self.resource_client.execute(req))?)
+    }
+    /// resource: resource from response body
+    /// url: url converted from resource
+    pub fn fetch_resource(
+        &mut self,
+        resource: &str,
+        table: TableType,
+        id: Uuid,
+        url: Option<Url>,
+    ) -> anyhow::Result<(Url, MessageInfo)> {
+        let _span = tracing::info_span!("fetch_resource", resource);
+        if let Some(u) = url {
+            tracing::debug!(url = u.as_url().as_str(), "trying url");
+            let resp = self.get_resource(u.clone())?;
+            if resp.status().is_success() {
+                return Ok((u, MessageInfo::new(&resp)));
+            }
+            tracing::debug!(
+                code = resp.status().as_u16(),
+                "get url from api returned {}, trying signed url",
+                resp.status()
+            );
+        }
+
+        let u = self
+            .get_signed_file_url(resource, table, id)
+            .context("failed to get signed file url")?;
+        let signed_url = Url::parse(
+            u.signed_urls
+                .first()
+                .context("get signed file url returned empty url list")?
+                .as_str(),
+        )
+        .context("invalid signed url")?;
+        let resp = self.get_resource(signed_url.clone())?;
+        if !resp.status().is_success() {
+            anyhow::bail!("fetching signed url returned {}", resp.status());
+        }
+        Ok((signed_url, MessageInfo::new(&resp)))
     }
 }

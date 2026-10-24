@@ -38,8 +38,13 @@ pub struct CollectionView {
     page_sort: Vec<Uuid>,
 }
 impl ApiObject for CollectionView {
-    type Ptr = RecordPtr;
-    fn update_state(&self, ptr: Self::Ptr, global_info: &mut GlobalInfo, state: &mut VisitState) {
+    type Ptr<'a> = RecordPtr;
+    fn update_state(
+        &self,
+        ptr: Self::Ptr<'_>,
+        global_info: &mut GlobalInfo,
+        state: &mut VisitState,
+    ) {
         let _span = tracing::info_span!(
             "on_fetched_collection_view",
             id = tracing::field::valuable(&UuidVal(ptr.id))

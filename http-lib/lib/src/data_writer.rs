@@ -25,23 +25,33 @@ impl CborFile {
     }
 }
 
+#[derive(Default)]
+pub struct DataBuf(Vec<u8>);
+impl DataBuf {
+    pub fn new() -> Self {
+        Self(Vec::new())
+    }
+    pub fn get_mut(&mut self) -> &mut Vec<u8> {
+        self.0.clear();
+        &mut self.0
+    }
+}
+
 pub struct JsonSeqFile {
-    val_buf: Vec<u8>,
     file: std::fs::File,
 }
 impl JsonSeqFile {
-    pub fn add(&mut self, obj: &impl serde::Serialize) -> anyhow::Result<()> {
-        self.val_buf.clear();
-        self.val_buf.push(0x1e);
-        serde_json::to_writer(&mut self.val_buf, obj).context("failed to serialize to json")?;
-        self.val_buf.push(b'\n');
-        self.file.write_all(&self.val_buf)?;
+    pub fn add(&mut self, buf: &mut DataBuf, obj: &impl serde::Serialize) -> anyhow::Result<()> {
+        let buf = buf.get_mut();
+        buf.push(0x1e);
+        serde_json::to_writer(&mut *buf, obj).context("failed to serialize to json")?;
+        buf.push(b'\n');
+        self.file.write_all(buf)?;
         Ok(())
     }
 }
 
 pub struct DataTar {
-    data_path_buf: PathBuf,
     blob_path_buf: PathBuf,
     tar: tar::Builder<std::io::BufWriter<std::fs::File>>,
 }
@@ -94,17 +104,14 @@ impl DataTar {
     }
     pub fn add_blob_data_seq<'a>(
         &mut self,
-        base_path: &Path,
+        path: &mut PathBuf,
         ext: &str,
         data: impl IntoIterator<Item = &'a Digest>,
     ) -> std::io::Result<()> {
         let mut hdr = tar::Header::new_gnu();
 
-        self.data_path_buf.clear();
-        self.data_path_buf.as_mut_os_string().push(base_path);
-
         self.blob_path_buf.clear();
-        for p in std::path::Path::new(base_path).components() {
+        for p in std::path::Path::new(path).components() {
             match p {
                 std::path::Component::ParentDir
                 | std::path::Component::RootDir
@@ -120,13 +127,13 @@ impl DataTar {
         hdr.set_mode(0o755);
         hdr.set_entry_type(tar::EntryType::Directory);
         self.tar
-            .append_data(&mut hdr, base_path, std::io::empty())?;
+            .append_data(&mut hdr, path.as_path(), std::io::empty())?;
 
         hdr.set_mode(0o777);
         hdr.set_entry_type(tar::EntryType::Symlink);
         for (idx, data) in data.into_iter().enumerate() {
             use std::fmt::Write;
-            let _ = std::write!(self.data_path_buf.as_mut_os_string(), "/{idx:08x}.{ext}");
+            let _ = std::write!(path.as_mut_os_string(), "/{idx:08x}.{ext}");
             match data {
                 Digest::Sha256(Sha256(sha256)) => {
                     self.blob_path_buf.push("sha256");
@@ -136,10 +143,9 @@ impl DataTar {
                 }
             }
 
-            self.tar
-                .append_link(&mut hdr, &self.data_path_buf, &self.blob_path_buf)?;
+            self.tar.append_link(&mut hdr, &path, &self.blob_path_buf)?;
 
-            self.data_path_buf.pop();
+            path.pop();
             self.blob_path_buf.pop();
             self.blob_path_buf.pop();
         }
@@ -148,12 +154,12 @@ impl DataTar {
     }
     pub fn add_message_info_seq(
         &mut self,
-        base_path: &Path,
+        path: &mut PathBuf,
         ext: &str,
         data: &[crate::http_client::MessageInfo],
     ) -> std::io::Result<()> {
         self.add_blob_data_seq(
-            base_path,
+            path,
             ext,
             data.iter()
                 .map(crate::http_client::MessageInfo::body_digest),
@@ -178,7 +184,6 @@ impl DataWriter {
     }
     pub fn create_data_tar_writer(&self, path: &CStr) -> std::io::Result<DataTar> {
         Ok(DataTar {
-            data_path_buf: PathBuf::new(),
             blob_path_buf: PathBuf::new(),
             tar: tar::Builder::new(std::io::BufWriter::new(
                 create_file(self.root.as_fd(), path)?.into(),
@@ -187,7 +192,6 @@ impl DataWriter {
     }
     pub fn create_jsonseq_writer(&self, path: &CStr) -> std::io::Result<JsonSeqFile> {
         Ok(JsonSeqFile {
-            val_buf: Vec::new(),
             file: create_file(self.root.as_fd(), path)?.into(),
         })
     }

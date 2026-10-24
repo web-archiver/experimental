@@ -125,9 +125,6 @@ impl serde::Serialize for TableType {
         serializer.serialize_str(self.to_str_internal())
     }
 }
-impl TableType {
-    pub(crate) const KNOWN_TYPES: &[Self] = Self::ALL;
-}
 pub struct VecMap<K, V>(pub Vec<(K, V)>);
 impl<K, V> Default for VecMap<K, V> {
     fn default() -> Self {
@@ -244,6 +241,9 @@ record_id_wrapper!(
 record_id_wrapper!(
     pub(crate) struct AutomationId(TableType::Automation);
 );
+record_id_wrapper!(
+    pub(crate) struct CommentId(TableType::Comment);
+);
 
 #[derive(Deserialize)]
 pub(crate) struct Pointer {
@@ -253,9 +253,14 @@ pub(crate) struct Pointer {
     pub table: EnumVal<TableType>,
 }
 impl ApiObject for Pointer {
-    type Ptr = ();
+    type Ptr<'a> = ();
     #[inline]
-    fn update_state(&self, (): Self::Ptr, global_info: &mut GlobalInfo, state: &mut VisitState) {
+    fn update_state(
+        &self,
+        (): Self::Ptr<'_>,
+        global_info: &mut GlobalInfo,
+        state: &mut VisitState,
+    ) {
         let Self {
             id,
             space_id,
@@ -278,9 +283,14 @@ impl ApiObject for Pointer {
 #[serde(transparent)]
 pub(crate) struct CopiedFromPointer(pub Pointer);
 impl ApiObject for crate::model::CopiedFromPointer {
-    type Ptr = ();
+    type Ptr<'a> = ();
     #[inline]
-    fn update_state(&self, (): Self::Ptr, global_info: &mut GlobalInfo, state: &mut VisitState) {
+    fn update_state(
+        &self,
+        (): Self::Ptr<'_>,
+        global_info: &mut GlobalInfo,
+        state: &mut VisitState,
+    ) {
         let Self(crate::model::Pointer {
             id,
             space_id,
@@ -296,6 +306,22 @@ impl ApiObject for crate::model::CopiedFromPointer {
         );
     }
 }
+
+#[derive(Debug, Deserialize)]
+#[serde(transparent)]
+pub(crate) struct ResourceUrl(String);
+impl ObjectId<(TableType, Uuid)> for ResourceUrl {
+    fn add_pending(
+        &self,
+        global_info: &mut GlobalInfo,
+        state: &mut VisitState,
+        (ty, id): (TableType, Uuid),
+        do_fetch: bool,
+    ) {
+        state.add_pending_resource(global_info, &self.0, ty, id, do_fetch);
+    }
+}
+
 pub mod block;
 pub mod collect_uuids;
 pub mod collection;
@@ -308,8 +334,8 @@ macro_rules! ignored_obj {
         #[serde(transparent)]
         $v struct $n(IgnoredAny);
         impl ApiObject for $n {
-            type Ptr = RecordPtr;
-            fn update_state(&self, ptr: Self::Ptr, global_info: &mut GlobalInfo, state: &mut VisitState) {
+            type Ptr<'a> = RecordPtr;
+            fn update_state(&self, ptr: Self::Ptr<'_>, global_info: &mut GlobalInfo, state: &mut VisitState) {
                 let Self(IgnoredAny) = self;
                 state.add_pending_record(
                     global_info,

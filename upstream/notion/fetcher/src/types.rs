@@ -251,6 +251,7 @@ pub mod get_signed_file_urls {
     }
     #[derive(Serialize)]
     pub(crate) struct UrlRequest<'a> {
+        #[serde(rename = "permissionRecord")]
         pub permission_record: PermissionRecord,
         pub url: &'a str,
     }
@@ -262,6 +263,7 @@ pub mod get_signed_file_urls {
     #[derive(Deserialize)]
     #[non_exhaustive]
     pub struct Response<U, const N: usize> {
+        #[serde(rename = "signedUrls")]
         pub signed_urls: smallvec::SmallVec<[U; N]>,
     }
 }

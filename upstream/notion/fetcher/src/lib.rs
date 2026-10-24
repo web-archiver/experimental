@@ -20,9 +20,17 @@ pub enum UnofficalApiV3Data<Resp, Resps> {
 }
 
 #[derive(GCborCodec)]
+pub struct NotionResource<U, Resp> {
+    resource: U,
+    fetch_url: U,
+    response: Resp,
+}
+
+#[derive(GCborCodec)]
 #[gcbor(rename_variants = "snake_case")]
-pub enum ObjectData<Resp, Resps> {
+pub enum ObjectData<U, Resp, Resps> {
     UnofficalApiV3(UnofficalApiV3Data<Resp, Resps>),
+    NotionResource(NotionResource<U, Resp>),
 }
 
 pub const PACKAGE: webar_core::object::Package<&'static str> = webar_core::object::Package {

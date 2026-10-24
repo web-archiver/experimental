@@ -19,7 +19,7 @@ fn main() -> anyhow::Result<()> {
         {
             let mut cfg = webar_http_lib::FetcherConfig::from_args(webar_http_lib::FetcherArgs {
                 primary_connector: webar_http_lib::Connector::TcpCaptured,
-                media_connector: webar_http_lib::Connector::Null,
+                media_connector: webar_http_lib::Connector::TcpCaptured,
             });
             cfg.primary_client.cookie = Some(
                 CookieStore::from_cookie_editor_json(
@@ -37,6 +37,7 @@ fn main() -> anyhow::Result<()> {
                 webar_upstream_notion_fetcher::client::Client::new(
                     ctx.runtime,
                     ctx.primary_client.clone(),
+                    ctx.media_small_client.clone(),
                 ),
                 c"data",
                 &mut *ctx.data_writer,

@@ -59,12 +59,12 @@ enum Field {
     #[serde(untagged)]
     Other {
         #[serde(rename = "type")]
-        ty: EnumVal<FieldType>,
+        _ty: EnumVal<FieldType>,
     },
 }
 impl ApiObject for Field {
-    type Ptr = ();
-    fn update_state(&self, _: Self::Ptr, global_info: &mut GlobalInfo, state: &mut VisitState) {
+    type Ptr<'a> = ();
+    fn update_state(&self, _: Self::Ptr<'_>, global_info: &mut GlobalInfo, state: &mut VisitState) {
         match self {
             Self::MultiSelect { options } => {
                 for SelectOption { id } in options {
@@ -76,7 +76,7 @@ impl ApiObject for Field {
                     state.add_obj_other(global_info, *id);
                 }
             }
-            Self::Other { ty: _ } => (),
+            Self::Other { _ty: _ } => (),
         }
     }
 }
@@ -103,10 +103,15 @@ pub struct Collection {
     template_pages: Vec<Uuid>,
 }
 impl ApiObject for Collection {
-    type Ptr = RecordPtr;
-    fn update_state(&self, ptr: Self::Ptr, global_info: &mut GlobalInfo, state: &mut VisitState) {
+    type Ptr<'a> = RecordPtr;
+    fn update_state(
+        &self,
+        ptr: Self::Ptr<'_>,
+        global_info: &mut GlobalInfo,
+        state: &mut VisitState,
+    ) {
         let Self {
-            id: _,
+            id,
             name,
             schema,
             format: CollectionFormat {
@@ -124,7 +129,7 @@ impl ApiObject for Collection {
             merge_space_uuid(ptr.space_id, *space_id),
             TableType::Collection,
         );
-        name.update_state((), global_info, state);
+        name.update_state((TableType::Collection, *id), global_info, state);
         state.add_pending_obj_with_table_opt(
             global_info,
             *parent_id,
