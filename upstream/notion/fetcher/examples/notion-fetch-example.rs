@@ -10,17 +10,26 @@ struct Cli {
     cookie_file: String,
     #[arg(long)]
     blob_index: Option<String>,
+    #[arg(long)]
+    fetcher_config: Option<String>,
     root: String,
 }
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
+    let fetcher_config = match &cli.fetcher_config {
+        Some(p) => Some(webar_http_lib::config::ConfigFile::from_file(p)?),
+        None => None,
+    };
     webar_http_lib::run_fetcher(
         &cli.root,
         {
-            let mut cfg = webar_http_lib::FetcherConfig::from_args(webar_http_lib::FetcherArgs {
-                primary_connector: webar_http_lib::Connector::TcpCaptured,
-                media_connector: webar_http_lib::Connector::TcpCaptured,
-            });
+            let mut cfg = match &fetcher_config {
+                Some(f) => webar_http_lib::FetcherConfig::from_config_file(f),
+                None => webar_http_lib::FetcherConfig::from_args(webar_http_lib::FetcherArgs {
+                    primary_connector: webar_http_lib::Connector::TcpCaptured,
+                    media_connector: webar_http_lib::Connector::TcpCaptured,
+                }),
+            };
             cfg.primary_client.cookie = Some(
                 CookieStore::from_cookie_editor_json(
                     std::fs::read(&cli.cookie_file)

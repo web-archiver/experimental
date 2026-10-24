@@ -15,6 +15,7 @@ use webar_core::{
 use webar_utils_fs::{create_dir, create_file, open_new_dir};
 
 pub mod blob;
+pub mod config;
 pub mod data_writer;
 pub mod http_client;
 pub mod local_id;
@@ -110,6 +111,9 @@ pub struct FetcherConfig<'a> {
     pub shared_blob_index: Option<&'a str>,
 }
 impl<'a> FetcherConfig<'a> {
+    pub fn from_config_file(f: &'a config::ConfigFile) -> Self {
+        f.to_config()
+    }
     pub fn from_args(args: FetcherArgs<'a>) -> Self {
         Self {
             primary_client: ClientConfig::new(args.primary_connector),
