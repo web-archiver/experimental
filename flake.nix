@@ -46,13 +46,20 @@
                   {
                     tag = "output";
                     source = "output";
-                    mountPoint = "/home/webar/output";
+                    mountPoint = "/home/webar/output-raw";
                   }
                 ];
                 vsock.cid = 33625;
               };
             }
             ({ lib, pkgs, ... }: {
+              fileSystems."/home/webar/output" = {
+                fsType = "fuse.bindfs";
+                device = "/home/webar/output-raw";
+                depends = [ "/home/webar/output-raw" ];
+                options = [ "force-user=webar" ];
+              };
+
               environment.etc."webar/http-fetcher-proxy.json".text = builtins.toJSON {
                 clients =
                   let
