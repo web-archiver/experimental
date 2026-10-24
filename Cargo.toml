@@ -19,6 +19,7 @@ members = [
   "utils/fs",
   "upstream/notion/core-rs",
   "upstream/notion/fetcher",
+  "upstream/notion/fetcher-bin",
   "upstream/nmbxd/fetcher",
 ]
 

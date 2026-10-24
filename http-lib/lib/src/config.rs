@@ -63,7 +63,7 @@ pub struct ConfigFile {
     shared_blob_index: Option<String>,
 }
 impl ConfigFile {
-    pub fn from_file(p: &str) -> anyhow::Result<Self> {
+    pub fn load_file(p: &str) -> anyhow::Result<Self> {
         let f = std::fs::read(p).context("failed to read file")?;
         serde_json::from_slice(&f).context("failed to decode json")
     }

@@ -16,7 +16,7 @@ struct Cli {
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let fetcher_config = match &cli.fetcher_config {
-        Some(f) => Some(webar_http_lib::config::ConfigFile::from_file(f)?),
+        Some(f) => Some(webar_http_lib::config::ConfigFile::load_file(f)?),
         None => None,
     };
     webar_http_lib::run_fetcher(

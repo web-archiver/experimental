@@ -1,5 +1,7 @@
 use std::sync::{Arc, RwLock};
 
+use anyhow::Context;
+
 mod cookie_editor;
 
 #[derive(Debug, Clone)]
@@ -18,6 +20,9 @@ impl CookieStore {
         let mut store = Self::new_inner();
         cookie_editor::import_json(&mut store, json)?;
         Ok(Self(Arc::new(RwLock::new(store))))
+    }
+    pub fn load_cookie_editor_json(path: &std::path::Path) -> anyhow::Result<Self> {
+        Self::from_cookie_editor_json(&std::fs::read(path).context("failed to read file")?)
     }
 }
 impl Default for CookieStore {

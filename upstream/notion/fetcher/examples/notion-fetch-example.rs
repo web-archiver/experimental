@@ -17,7 +17,7 @@ struct Cli {
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let fetcher_config = match &cli.fetcher_config {
-        Some(p) => Some(webar_http_lib::config::ConfigFile::from_file(p)?),
+        Some(p) => Some(webar_http_lib::config::ConfigFile::load_file(p)?),
         None => None,
     };
     webar_http_lib::run_fetcher(
@@ -31,12 +31,8 @@ fn main() -> anyhow::Result<()> {
                 }),
             };
             cfg.primary_client.cookie = Some(
-                CookieStore::from_cookie_editor_json(
-                    std::fs::read(&cli.cookie_file)
-                        .context("failed to read cookie file")?
-                        .as_slice(),
-                )
-                .context("failed to decode cookie file")?,
+                CookieStore::load_cookie_editor_json(cli.cookie_file.as_ref())
+                    .context("failed to decode cookie file")?,
             );
             cfg.shared_blob_index = cli.blob_index.as_deref();
             cfg

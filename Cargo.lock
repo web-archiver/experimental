@@ -2649,6 +2649,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "webar-upstream-notion-fetcher-bin"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "serde",
+ "serde_json",
+ "uuid",
+ "webar-http-lib",
+ "webar-upstream-notion-fetcher",
+]
+
+[[package]]
 name = "webar-utils-fs"
 version = "0.1.0"
 dependencies = [
