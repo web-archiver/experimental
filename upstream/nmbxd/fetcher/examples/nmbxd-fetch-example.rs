@@ -2,6 +2,8 @@ use anyhow::Context;
 use clap::Parser;
 use webar_http_lib::http_client::cookie::CookieStore;
 
+use webar_upstream_nmbxd_fetcher::ThreadId;
+
 #[derive(clap::Parser)]
 struct Cli {
     #[arg(long)]
@@ -60,9 +62,9 @@ fn main() -> anyhow::Result<()> {
                 &mut *ctx.data_writer,
             )?;
             fetcher.list_forums()?;
-            fetcher.fetch_thread(52752005)?;
-            fetcher.fetch_thread(50709346)?;
-            fetcher.fetch_thread(52551957)?;
+            fetcher.fetch_thread(ThreadId(52752005))?;
+            fetcher.fetch_thread(ThreadId(50709346))?;
+            fetcher.fetch_thread(ThreadId(52551957))?;
             fetcher.finish()
         },
     )

@@ -4,6 +4,8 @@ use anyhow::Context;
 
 use webar_http_lib::http_client::{MessageInfo, ReqBody, Url};
 
+use crate::ThreadId;
+
 macro_rules! api_url {
     ($p:literal) => {
         std::concat!("https://api.nmb.best/api/", $p)
@@ -51,15 +53,15 @@ impl ApiClient {
     }
     pub fn get_thread(
         &mut self,
-        id: usize,
-        page: usize,
+        id: ThreadId,
+        page: u64,
     ) -> anyhow::Result<(MessageInfo, crate::model::Thread)> {
         self.url_buf.clear();
 
         let _ = write!(
             &mut self.url_buf,
             api_url!("thread?id={id}&page={page}"),
-            id = id,
+            id = id.0,
             page = page
         );
         self.call_api_get(Url::parse(&self.url_buf).context("invalid url")?)

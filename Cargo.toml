@@ -21,6 +21,7 @@ members = [
   "upstream/notion/fetcher",
   "upstream/notion/fetcher-bin",
   "upstream/nmbxd/fetcher",
+  "upstream/nmbxd/fetcher-bin",
 ]
 
 

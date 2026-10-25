@@ -1,10 +1,26 @@
-use webar_core::codec::gcbor::ToGCbor;
+use webar_core::codec::gcbor::{GCborCodec, ToGCbor};
+
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    GCborCodec,
+    serde::Serialize,
+    serde::Deserialize,
+)]
+#[serde(transparent)]
+#[gcbor(transparent)]
+pub struct ThreadId(pub u64);
 
 #[derive(ToGCbor)]
 #[gcbor(rename_variants = "snake_case")]
 pub enum ApiData<Resp, Resps> {
     ListForums { response: Resp },
-    GetThread { id: u64, responses: Resps },
+    GetThread { id: ThreadId, responses: Resps },
 }
 
 #[derive(ToGCbor)]

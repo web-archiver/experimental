@@ -4,6 +4,8 @@ use indicatif::ProgressStyle;
 use tracing_indicatif::span_ext::IndicatifSpanExt;
 use webar_http_lib::{error_field, http_client::MessageInfo};
 
+use crate::ThreadId;
+
 type ObjData<'a> = crate::ObjectData<&'a str, &'a MessageInfo, &'a [MessageInfo]>;
 
 const SPINNER_TEMPLATE: &str = "{span_child_prefix} {spinner} {msg}";
@@ -94,10 +96,10 @@ impl Fetcher {
         }
         Ok(())
     }
-    pub fn fetch_thread(&mut self, id: usize) -> anyhow::Result<()> {
+    pub fn fetch_thread(&mut self, id: ThreadId) -> anyhow::Result<()> {
         let span = tracing::info_span!(
             "fetch_thread",
-            id,
+            id = id.0,
             indicatif.pb_show = tracing::field::Empty
         )
         .entered();
@@ -141,7 +143,7 @@ impl Fetcher {
             };
             resp_buf.push(msg);
             self.fetch_thread_images(&thr)?;
-            let len_without_tips = thr.replies.iter().filter(|v| v.id != 9999999).count();
+            let len_without_tips = thr.replies.iter().filter(|v| v.id.0 != 9999999).count();
             span.pb_inc(len_without_tips as u64);
             if len_without_tips == 0 {
                 break;
@@ -150,14 +152,15 @@ impl Fetcher {
 
         self.object_file
             .add(&ObjData::Api(crate::ApiData::GetThread {
-                id: id as u64,
+                id,
                 responses: &resp_buf,
             }))?;
 
         self.path_buf.clear();
         let _ = std::write!(
             self.path_buf.as_mut_os_string(),
-            "api/get-thread/{seq:08x}_{id}"
+            "api/get-thread/{seq:08x}_{}",
+            id.0
         );
         self.data_tar
             .add_message_info_seq(&mut self.path_buf, "json", &resp_buf)?;

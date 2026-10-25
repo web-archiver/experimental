@@ -1,15 +1,17 @@
 use serde::{Deserialize, de::IgnoredAny};
 
+use crate::ThreadId;
+
 #[derive(Deserialize)]
 pub(crate) struct Reply {
-    pub(crate) id: usize,
+    pub(crate) id: ThreadId,
     pub(crate) img: String,
     pub(crate) ext: String,
 }
 
 #[derive(Deserialize)]
 pub struct Thread {
-    pub id: usize,
+    pub id: ThreadId,
     #[serde(rename = "ReplyCount")]
     pub(crate) reply_count: usize,
     pub(crate) img: String,

@@ -1,0 +1,13 @@
+[package]
+name = "webar-upstream-nmbxd-fetcher-bin"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+webar-http-lib.workspace = true
+webar-upstream-nmbxd-fetcher = { path = "../fetcher" }
