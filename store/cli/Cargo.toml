@@ -1,0 +1,11 @@
+[package]
+name = "webar-store-cli"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+rustix.workspace = true
+webar-store-backend-fs.workspace = true

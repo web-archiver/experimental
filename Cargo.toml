@@ -16,6 +16,7 @@ members = [
   "net/tls/rustls-conn",
   "store/backend/fs",
   "store/blob-filter-bin",
+  "store/cli",
   "utils/fs",
   "upstream/notion/core-rs",
   "upstream/notion/fetcher",

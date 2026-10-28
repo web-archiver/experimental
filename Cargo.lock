@@ -2596,6 +2596,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "webar-store-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "rustix",
+ "webar-store-backend-fs",
+]
+
+[[package]]
 name = "webar-target-info"
 version = "0.1.0"
 dependencies = [

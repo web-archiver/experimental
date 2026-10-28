@@ -139,6 +139,26 @@ impl Store {
         self.link_fd(&file.digest, file.file.as_fd())
     }
 
+    pub fn link_ext_file(&self, digest: &Digest, dir: BorrowedFd<'_>, path: &CStr) -> Result<bool> {
+        let mode = fs::Mode::from_raw_mode(fs::statat(dir, path, fs::AtFlags::empty())?.st_mode);
+        let write_mode = const { fs::Mode::WUSR.union(fs::Mode::WGRP).union(fs::Mode::WOTH) };
+        if mode.intersects(write_mode) {
+            fs::chmodat(dir, path, mode.difference(write_mode), AtFlags::empty())?;
+        }
+        let mut path_buf = PathBuf::new();
+        let store_path = path_buf.digest_path_cstr(digest);
+        match fs::linkat(
+            dir,
+            path,
+            self.root.as_fd(),
+            store_path,
+            AtFlags::SYMLINK_FOLLOW,
+        ) {
+            Ok(()) => Ok(true),
+            Err(Errno::EXIST) => Ok(false),
+            Err(e) => Err(e),
+        }
+    }
     pub fn link_blob(&self, digest: &Digest, other: &Self) -> Result<bool> {
         let mut path = PathBuf::new();
         let path = path.digest_path_cstr(digest);
