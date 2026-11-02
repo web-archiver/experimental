@@ -24,6 +24,7 @@
             {
               microvm = {
                 vcpu = 4;
+                mem = 4 * 1024;
                 shares = [
                   {
                     tag = "nix-store";
@@ -33,7 +34,7 @@
                   }
                   {
                     tag = "source";
-                    source = "src";
+                    source = "source";
                     mountPoint = "/home/webar/source";
                     readOnly = true;
                   }
@@ -49,7 +50,10 @@
                     mountPoint = "/home/webar/output-raw";
                   }
                 ];
-                vsock.cid = 33625;
+                vsock = {
+                  cid = 33625;
+                  ssh.enable = true;
+                };
               };
             }
             ({ lib, pkgs, ... }: {
@@ -57,7 +61,10 @@
                 fsType = "fuse.bindfs";
                 device = "/home/webar/output-raw";
                 depends = [ "/home/webar/output-raw" ];
-                options = [ "force-user=webar" ];
+                options = [
+                  "force-user=webar"
+                  "auto_cache"
+                ];
               };
 
               environment.etc."webar/http-fetcher-proxy.json".text = builtins.toJSON {
@@ -85,10 +92,11 @@
 
               users.users.webar = {
                 isNormalUser = true;
-                password = "webar";
+                password = "";
                 extraGroups = [ "wheel" ];
               };
               security.sudo.wheelNeedsPassword = false;
+              services.getty.autologinUser = "webar";
 
               system.stateVersion = lib.trivial.release;
             })
