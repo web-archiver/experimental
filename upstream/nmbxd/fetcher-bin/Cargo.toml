@@ -9,5 +9,8 @@ anyhow.workspace = true
 clap.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+tracing.workspace = true
+indicatif.workspace = true
+tracing-indicatif.workspace = true
 webar-http-lib.workspace = true
 webar-upstream-nmbxd-fetcher = { path = "../fetcher" }

@@ -1,5 +1,6 @@
 use anyhow::Context;
 use clap::Parser;
+use tracing_indicatif::span_ext::IndicatifSpanExt;
 use webar_upstream_nmbxd_fetcher::ThreadId;
 
 #[derive(serde::Deserialize)]
@@ -60,8 +61,23 @@ fn main() -> anyhow::Result<()> {
                 ctx.data_writer,
             )?;
             fetcher.list_forums()?;
-            for t in inputs.threads {
-                fetcher.fetch_thread(t)?;
+            {
+                let span = tracing::info_span!(
+                    "fetching threads",
+                    indicatif.pb_show = tracing::field::Empty
+                )
+                .entered();
+                span.pb_set_length(inputs.threads.len() as u64);
+                span.pb_set_style(
+                    &indicatif::ProgressStyle::with_template(
+                        "{span_child_prefix} {wide_bar} {pos}/{len} {percent}% fetching threads",
+                    )
+                    .unwrap(),
+                );
+                for t in inputs.threads {
+                    fetcher.fetch_thread(t)?;
+                    span.pb_inc(1);
+                }
             }
             fetcher.finish()
         },

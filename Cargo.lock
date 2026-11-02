@@ -2638,8 +2638,11 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "indicatif",
  "serde",
  "serde_json",
+ "tracing",
+ "tracing-indicatif",
  "webar-http-lib",
  "webar-upstream-nmbxd-fetcher",
 ]
