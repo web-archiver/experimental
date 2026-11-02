@@ -16,27 +16,38 @@ pub struct ApiClient {
     runtime: tokio::runtime::Handle,
     api_client: webar_http_lib::http_client::Client,
     url_buf: String,
+    user_hash: Option<http::HeaderValue>,
 }
 impl ApiClient {
     pub fn new(
         runtime: tokio::runtime::Handle,
         api_client: webar_http_lib::http_client::Client,
-    ) -> Self {
-        Self {
+        user_hash: Option<&str>,
+    ) -> anyhow::Result<Self> {
+        Ok(Self {
             runtime,
             api_client,
             url_buf: String::new(),
-        }
+            user_hash: match user_hash {
+                Some(u) => Some(
+                    http::HeaderValue::from_maybe_shared(format!("userhash={u}"))
+                        .context("invalid user hash")?,
+                ),
+                None => None,
+            },
+        })
     }
     fn call_api_get<T: serde::de::DeserializeOwned>(
         &mut self,
         url: Url,
     ) -> anyhow::Result<(MessageInfo, T)> {
-        let req = self
-            .api_client
-            .request(http::Method::GET, url)
-            .build(ReqBody::empty())
-            .context("invalid request")?;
+        let req = self.api_client.request(http::Method::GET, url);
+        let req = match &self.user_hash {
+            Some(u) => req.header(http::header::COOKIE, u.clone()),
+            None => req,
+        }
+        .build(ReqBody::empty())
+        .context("invalid request")?;
         let resp = self
             .runtime
             .block_on(self.api_client.execute(req))

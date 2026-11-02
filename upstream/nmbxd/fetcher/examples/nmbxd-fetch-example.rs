@@ -12,6 +12,8 @@ struct Cli {
     blob_index: Option<String>,
     #[arg(long)]
     fetcher_config: Option<String>,
+    #[arg(long)]
+    user_hash: Option<String>,
     root: String,
 }
 
@@ -46,7 +48,8 @@ fn main() -> anyhow::Result<()> {
             let mut api_client = webar_upstream_nmbxd_fetcher::client::ApiClient::new(
                 ctx.runtime.clone(),
                 ctx.primary_client.clone(),
-            );
+                cli.user_hash.as_deref(),
+            )?;
             let img_client = webar_upstream_nmbxd_fetcher::client::ImageClient::new(
                 ctx.runtime.clone(),
                 ctx.media_small_client.clone(),
@@ -65,6 +68,7 @@ fn main() -> anyhow::Result<()> {
             fetcher.fetch_thread(ThreadId(52752005))?;
             fetcher.fetch_thread(ThreadId(50709346))?;
             fetcher.fetch_thread(ThreadId(52551957))?;
+            fetcher.fetch_thread(ThreadId(50286677))?; // login required thread
             fetcher.finish()
         },
     )
