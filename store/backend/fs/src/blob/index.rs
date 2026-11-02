@@ -41,13 +41,15 @@ impl Index {
             Digest::Sha256(Sha256(d)) => self.conn.prepare_cached(SHA256_EXISTS_SQL)?.exists([d]),
         }
     }
-    pub fn insert(&mut self, digest: &Digest) -> Result<()> {
-        match digest {
-            Digest::Sha256(Sha256(d)) => {
-                self.conn.prepare_cached(SHA256_INSERT_SQL)?.insert((d,))?
-            }
+    pub fn insert(&mut self, digest: &Digest) -> Result<bool> {
+        let ret = match digest {
+            Digest::Sha256(Sha256(d)) => self.conn.prepare_cached(SHA256_INSERT_SQL)?.insert((d,)),
         };
-        Ok(())
+        match ret {
+            Ok(_) => Ok(true),
+            Err(rusqlite::Error::StatementChangedRows(_)) => Ok(false),
+            Err(e) => Err(e),
+        }
     }
     pub fn handle(&mut self) -> Result<Handle<'_>> {
         Ok(Handle {
@@ -67,10 +69,14 @@ impl<'a> Handle<'a> {
             Digest::Sha256(Sha256(d)) => self.sha256_exists.exists([d]),
         }
     }
-    pub fn insert(&mut self, digest: &Digest) -> Result<()> {
-        match digest {
-            Digest::Sha256(Sha256(d)) => self.sha256_insert.insert((d,))?,
+    pub fn insert(&mut self, digest: &Digest) -> Result<bool> {
+        let ret = match digest {
+            Digest::Sha256(Sha256(d)) => self.sha256_insert.insert((d,)),
         };
-        Ok(())
+        match ret {
+            Ok(_) => Ok(true),
+            Err(rusqlite::Error::StatementChangedRows(_)) => Ok(false),
+            Err(e) => Err(e),
+        }
     }
 }
