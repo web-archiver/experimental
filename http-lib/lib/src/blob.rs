@@ -5,7 +5,6 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use rustix::fs;
 
 use webar_core::{
     codec::gcbor::{self, map::GCborMap, set::GCborSet},
@@ -14,15 +13,12 @@ use webar_core::{
 use webar_http_lib_core::{
     blob::Info,
     fetch::{BLOB_INCREMENTAL_INFO_FILE, BLOB_INCREMENTAL_STORE},
-    FilePath,
 };
 use webar_store_backend_fs::blob::{
     index::Index,
     store::{BlobFile, Store},
 };
-use webar_utils_fs::{create_dir, create_file, open_new_dir, write_fd};
-
-const TMP_DIR: FilePath = FilePath::new_throw(c"blob/tmp");
+use webar_utils_fs::{create_dir, create_file, write_fd};
 
 type IncrementalInfo =
     webar_store_backend_fs::blob::IncrementalInfo<GCborSet<Digest>, GCborMap<Digest, Info>>;
@@ -32,7 +28,6 @@ pub type Error = anyhow::Error;
 pub struct BlobStore {
     store: Store,
     shared_index: Option<Mutex<Index>>,
-    tmp_dir: OwnedFd,
     incremental_info_fd: OwnedFd,
     incremental_info: Mutex<IncrementalInfo>,
 }
@@ -52,12 +47,9 @@ impl BlobStore {
         let incremental_info_fd = create_file(root, BLOB_INCREMENTAL_INFO_FILE.c_path)
             .context("failed to create incremental info file")?;
 
-        let tmp_dir = open_new_dir(root, TMP_DIR.c_path).context("failed to open tmp dir")?;
-
         Ok(Self {
             store,
             shared_index,
-            tmp_dir,
             incremental_info_fd,
             incremental_info: Mutex::new(IncrementalInfo {
                 existing: GCborSet::new(),
@@ -148,9 +140,6 @@ impl BlobStore {
         self.store
             .set_readonly()
             .context("failed to set incremental store readonly")?;
-
-        fs::unlinkat(self.tmp_dir, c".", fs::AtFlags::REMOVEDIR)
-            .context("failed to remove temp dir")?;
 
         Ok(())
     }

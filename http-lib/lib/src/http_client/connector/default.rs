@@ -72,7 +72,7 @@ impl hyper_util::client::legacy::connect::Connection for StreamTunTrans {
     fn connected(&self) -> hyper_util::client::legacy::connect::Connected {
         match self {
             Self::Unix(c) => c.connected(),
-            Self::Vsock(c) => hyper_util::client::legacy::connect::Connected::new(),
+            Self::Vsock(_) => hyper_util::client::legacy::connect::Connected::new(),
         }
     }
 }
