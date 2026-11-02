@@ -1,3 +1,5 @@
+use std::{borrow::Cow, ops::Deref};
+
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum SameSite {
@@ -10,8 +12,10 @@ enum SameSite {
 #[serde(rename_all = "camelCase")]
 struct Cookie<'a> {
     // double slash and double quote are not allowed in cookie name and value
-    name: &'a str,
-    value: &'a str,
+    #[serde(borrow)]
+    name: Cow<'a, str>,
+    #[serde(borrow)]
+    value: Cow<'a, str>,
     domain: &'a str,
     path: &'a str,
     secure: bool,
@@ -36,7 +40,7 @@ pub(super) enum Error {
 pub(super) fn import_json(store: &mut cookie_store::CookieStore, json: &[u8]) -> Result<(), Error> {
     let mut u = url::Url::parse("https://example.com").unwrap();
     for c in serde_json::from_slice::<Vec<Cookie<'_>>>(json).map_err(Error::Json)? {
-        let mut builder = cookie_store::RawCookie::build((c.name, c.value))
+        let mut builder = cookie_store::RawCookie::build((c.name.deref(), c.value.deref()))
             .domain(c.domain)
             .path(c.path)
             .secure(c.secure);
