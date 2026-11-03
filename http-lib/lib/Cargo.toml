@@ -13,6 +13,7 @@ rustix = { workspace = true, features = [
   "process",
   "system",
   "net",
+  "mount"
 ] }
 rustls = "0.23.21"
 # logging

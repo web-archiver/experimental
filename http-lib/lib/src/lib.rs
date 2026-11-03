@@ -486,7 +486,9 @@ pub fn run_fetcher(
     let parent_gid = rustix::process::getegid();
     unsafe {
         rustix::thread::unshare_unsafe(
-            rustix::thread::UnshareFlags::NEWUSER | rustix::thread::UnshareFlags::NEWPID,
+            rustix::thread::UnshareFlags::NEWUSER
+                | rustix::thread::UnshareFlags::NEWPID
+                | rustix::thread::UnshareFlags::NEWNS,
         )
         .context("failed to create sandbox")?;
     }
@@ -499,6 +501,17 @@ pub fn run_fetcher(
             .unwrap();
         std::process::exit(stat.exit_status().unwrap_or(-1))
     }
+
+    rustix::mount::mount(
+        c"proc",
+        c"/proc",
+        c"proc",
+        rustix::mount::MountFlags::NOSUID
+            | rustix::mount::MountFlags::NOEXEC
+            | rustix::mount::MountFlags::NODEV,
+        None,
+    )
+    .context("failed to mount proc fs")?;
 
     let start_time = Timestamp::now();
     let uuid = uuid::Uuid::new_v7(uuid::Timestamp::from_unix(

@@ -46,7 +46,9 @@ fn main() {
     unsafe {
         // create pid namespace to ensure child processes are killed on panic
         rustix::thread::unshare_unsafe(
-            rustix::thread::UnshareFlags::NEWUSER | rustix::thread::UnshareFlags::NEWPID,
+            rustix::thread::UnshareFlags::NEWUSER
+                | rustix::thread::UnshareFlags::NEWPID
+                | rustix::thread::UnshareFlags::NEWNS,
         )
         .unwrap();
     }
@@ -60,6 +62,16 @@ fn main() {
             .unwrap();
         std::process::exit(stat.exit_status().unwrap())
     }
+    rustix::mount::mount(
+        c"proc",
+        c"/proc",
+        c"proc",
+        rustix::mount::MountFlags::NOSUID
+            | rustix::mount::MountFlags::NOEXEC
+            | rustix::mount::MountFlags::NODEV,
+        None,
+    )
+    .unwrap();
 
     const C2S_MSG: &str = "client_to_server";
     const S2C_MSG: &str = "server_to_client";
