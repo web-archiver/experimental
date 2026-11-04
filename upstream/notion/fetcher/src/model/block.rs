@@ -496,7 +496,7 @@ impl ApiObject for Block {
                     },
                 permissions,
             } => {
-                state.add_pending_page(global_info, ptr.id, true);
+                state.add_pending_page(global_info, ptr.id, state.config.recurse_page);
                 base.update_state((), global_info, state);
                 copied_from_pointer.update_state((), global_info, state);
                 site_id.add_ignored(global_info, state);

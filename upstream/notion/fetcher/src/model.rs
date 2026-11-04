@@ -80,7 +80,12 @@ impl<'de, T: NamedEnumTag> Deserialize<'de> for EnumVal<T> {
                 match T::tag_from_str(v) {
                     Some(r) => Ok(EnumVal::Known(r)),
                     None => {
-                        tracing::warn!(val = v, "unknown {}: {v}", T::NAME);
+                        tracing::warn!(
+                            ty = std::any::type_name::<T>(),
+                            val = v,
+                            "unknown {}: {v}",
+                            T::NAME
+                        );
                         Ok(EnumVal::Unknown)
                     }
                 }
@@ -103,6 +108,7 @@ mk_enum_tag!(
         Comment = "comment",
         Discussion = "discussion",
         Follow = "follow",
+        Layout = "layout",
         NotionUser = "notion_user",
         SlackIntegration = "slack_integration",
         Snapshot = "snapshot",

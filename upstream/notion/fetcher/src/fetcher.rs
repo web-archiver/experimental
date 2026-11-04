@@ -640,6 +640,7 @@ impl<'c> VisitState<'c> {
             | TableType::Comment
             | TableType::Discussion
             | TableType::Follow
+            | TableType::Layout
             | TableType::NotionUser
             | TableType::SlackIntegration
             | TableType::Snapshot

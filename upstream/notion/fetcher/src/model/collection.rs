@@ -30,10 +30,13 @@ mk_enum_tag!(
         Number = "number",
         Person = "person",
         PhoneNumber = "phone_number",
+        Relation = "relation",
+        Rollup = "rollup",
         Select = "select",
         Text = "text",
         Title = "title",
         Url = "url",
+        Verification = "verification",
     }
 );
 impl NamedEnumTag for FieldType {
