@@ -312,10 +312,13 @@ impl Client {
         resource: &str,
         table: TableType,
         id: Uuid,
+        require_sign: Option<bool>,
         url: Option<Url>,
     ) -> anyhow::Result<(Url, MessageInfo)> {
         let _span = tracing::info_span!("fetch_resource", resource);
-        if let Some(u) = url {
+        if require_sign != Some(true)
+            && let Some(u) = url
+        {
             tracing::debug!(url = u.as_url().as_str(), "trying url");
             let resp = self.get_resource(u.clone())?;
             if resp.status().is_success() {
@@ -326,6 +329,12 @@ impl Client {
                 "get url from api returned {}, trying signed url",
                 resp.status()
             );
+        }
+
+        if require_sign == Some(false) {
+            anyhow::bail!(
+                "Resouece does not need signed url but resource url is missing or fetching resource url failed."
+            )
         }
 
         let u = self

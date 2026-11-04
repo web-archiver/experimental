@@ -281,6 +281,8 @@ impl ResourceSrc {
 #[derive(Debug, Serialize, valuable::Valuable)]
 struct ResourceInfo {
     src: ResourceSrc,
+    /// whether url needs to be signed by notion
+    sign: Option<bool>,
     #[serde(skip)]
     #[valuable(skip)]
     url: Option<webar_http_lib::http_client::Url>,
@@ -1278,12 +1280,14 @@ impl<'c> VisitState<'c> {
                         Ok(ResourceInfo {
                             src: ResourceSrc::Embedded,
                             url: None,
+                            sign: Some(false),
                             status: ResourceStatus { fetched: true },
                         })
                     } else if u.starts_with("attachment:") {
                         Ok(ResourceInfo {
                             src: ResourceSrc::NotionId,
                             url: None,
+                            sign: Some(true),
                             status: ResourceStatus { fetched: false },
                         })
                     } else {
@@ -1293,17 +1297,26 @@ impl<'c> VisitState<'c> {
                                     return Ok(ResourceInfo {
                                         src: ResourceSrc::Other,
                                         url: None,
+                                        sign: Some(false),
                                         status: ResourceStatus { fetched: false },
                                     });
                                 }
                                 let host = url.host_str().context("url missing host")?;
-                                if (host.ends_with(".amazonaws.com")
-                                    && url.path().starts_with("/secure.notion-static.com/"))
-                                    || host == "img.notionusercontent.com"
+                                if host.ends_with(".amazonaws.com")
+                                    && url.path().starts_with("/secure.notion-static.com/")
+                                {
+                                    Ok(ResourceInfo {
+                                        src: ResourceSrc::NotionUrl,
+                                        sign: Some(true),
+                                        url: Some(http_client::Url::from_url(url)?),
+                                        status: ResourceStatus { fetched: false },
+                                    })
+                                } else if host == "img.notionusercontent.com"
                                     || host == "file.notion.com"
                                 {
                                     Ok(ResourceInfo {
                                         src: ResourceSrc::NotionUrl,
+                                        sign: None,
                                         url: Some(http_client::Url::from_url(url)?),
                                         status: ResourceStatus { fetched: false },
                                     })
@@ -1311,17 +1324,26 @@ impl<'c> VisitState<'c> {
                                     Ok(ResourceInfo {
                                         src: ResourceSrc::External,
                                         url: Some(http_client::Url::from_url(url)?),
+                                        sign: None,
                                         status: ResourceStatus { fetched: false },
                                     })
                                 }
                             }
                             Err(url::ParseError::RelativeUrlWithoutBase) => {
-                                if u.starts_with("/images/") {
+                                if u.starts_with("/images/") || u.starts_with("/icons/") {
                                     Ok(ResourceInfo {
                                         src: ResourceSrc::NotionUrl,
                                         url: Some(http_client::Url::from_url(
                                             NOTION_BASE.join(u)?,
                                         )?),
+                                        sign: None,
+                                        status: ResourceStatus { fetched: false },
+                                    })
+                                } else if u.starts_with("/p/") {
+                                    Ok(ResourceInfo {
+                                        src: ResourceSrc::Other,
+                                        sign: None,
+                                        url: None,
                                         status: ResourceStatus { fetched: false },
                                     })
                                 } else {
@@ -1329,6 +1351,7 @@ impl<'c> VisitState<'c> {
                                     url.path_segments_mut().unwrap().extend(&["image", u]);
                                     Ok(ResourceInfo {
                                         src: ResourceSrc::NotionUrl,
+                                        sign: None,
                                         url: Some(webar_http_lib::http_client::Url::from_url(url)?),
                                         status: ResourceStatus { fetched: false },
                                     })
@@ -1345,6 +1368,7 @@ impl<'c> VisitState<'c> {
                         v.insert(ResourceInfo {
                             src: ResourceSrc::Invalid,
                             url: None,
+                            sign: None,
                             status: ResourceStatus { fetched: false },
                         })
                     }
@@ -1807,20 +1831,21 @@ impl Fetcher {
 
         tracing::info!("fetching resource");
 
-        let (u, resp) = match self
-            .client
-            .fetch_resource(url_str, r.table, r.id, info.url.clone())
-        {
-            Ok(r) => r,
-            Err(e) => {
-                tracing::error!(
-                    err = webar_http_lib::error_field(&e),
-                    "failed to fetch resource: {e:?}"
-                );
-                state.status.fetched = VisitStatus::Failed;
-                return Ok(());
-            }
-        };
+        let (u, resp) =
+            match self
+                .client
+                .fetch_resource(url_str, r.table, r.id, info.sign, info.url.clone())
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    tracing::error!(
+                        err = webar_http_lib::error_field(&e),
+                        "failed to fetch resource: {e:?}"
+                    );
+                    state.status.fetched = VisitStatus::Failed;
+                    return Ok(());
+                }
+            };
 
         self.object_file
             .add(&ObjectData::NotionResource(crate::NotionResource {
@@ -1867,18 +1892,18 @@ impl Fetcher {
         while !vis.queue.is_empty() {
             while let Some(p) = vis.queue.get_page.pop_front() {
                 self.get_page_chunk(p.page_id, &mut vis)?;
-                self.debug_file.add(
-                    &mut self.data_buf,
-                    &debug_info::DebugInfo::new(&self.info, visit_seq, &vis),
-                )?;
             }
+            self.debug_file.add(
+                &mut self.data_buf,
+                &debug_info::DebugInfo::new(&self.info, visit_seq, &vis),
+            )?;
             while let Some(q) = vis.queue.query_collection.pop_front() {
                 self.query_collection_view(&q, &mut vis)?;
-                self.debug_file.add(
-                    &mut self.data_buf,
-                    &debug_info::DebugInfo::new(&self.info, visit_seq, &vis),
-                )?;
             }
+            self.debug_file.add(
+                &mut self.data_buf,
+                &debug_info::DebugInfo::new(&self.info, visit_seq, &vis),
+            )?;
             if !vis.queue.get_record.is_empty() {
                 std::mem::swap(&mut vis.queue.get_record, &mut vis.queue.fetch_record);
 
@@ -1895,11 +1920,11 @@ impl Fetcher {
             }
             while let Some(r) = vis.queue.get_resource.pop_front() {
                 self.fetch_resource(r, &mut vis)?;
-                self.debug_file.add(
-                    &mut self.data_buf,
-                    &debug_info::DebugInfo::new(&self.info, visit_seq, &vis),
-                )?;
             }
+            self.debug_file.add(
+                &mut self.data_buf,
+                &debug_info::DebugInfo::new(&self.info, visit_seq, &vis),
+            )?;
         }
 
         for (id, state) in vis.objects.iter() {
