@@ -14,6 +14,8 @@ use webar_core::{
 };
 use webar_utils_fs::{create_file, open_new_dir, set_dir_ro, write_file};
 
+use crate::lzip_file::LzipFile;
+
 pub struct CborFile {
     val_buf: ValueBuf,
     file: std::fs::File,
@@ -37,17 +39,31 @@ impl DataBuf {
     }
 }
 
-pub struct JsonSeqFile {
-    file: std::fs::File,
-}
-impl JsonSeqFile {
-    pub fn add(&mut self, buf: &mut DataBuf, obj: &impl serde::Serialize) -> anyhow::Result<()> {
+struct JsonSeqWriter<W>(W);
+impl<W: std::io::Write> JsonSeqWriter<W> {
+    fn add(&mut self, buf: &mut DataBuf, obj: &impl serde::Serialize) -> anyhow::Result<()> {
         let buf = buf.get_mut();
         buf.push(0x1e);
         serde_json::to_writer(&mut *buf, obj).context("failed to serialize to json")?;
         buf.push(b'\n');
-        self.file.write_all(buf)?;
+        self.0.write_all(buf)?;
         Ok(())
+    }
+}
+
+pub struct JsonSeqFile(JsonSeqWriter<std::fs::File>);
+impl JsonSeqFile {
+    pub fn add(&mut self, buf: &mut DataBuf, obj: &impl serde::Serialize) -> anyhow::Result<()> {
+        self.0.add(buf, obj)
+    }
+}
+pub struct JsonSeqLzFile(JsonSeqWriter<LzipFile>);
+impl JsonSeqLzFile {
+    pub fn add(&mut self, buf: &mut DataBuf, obj: &impl serde::Serialize) -> anyhow::Result<()> {
+        self.0.add(buf, obj)
+    }
+    pub fn finish(mut self) -> anyhow::Result<()> {
+        self.0 .0.finish()
     }
 }
 
@@ -191,9 +207,15 @@ impl DataWriter {
         })
     }
     pub fn create_jsonseq_writer(&self, path: &CStr) -> std::io::Result<JsonSeqFile> {
-        Ok(JsonSeqFile {
-            file: create_file(self.root.as_fd(), path)?.into(),
-        })
+        Ok(JsonSeqFile(JsonSeqWriter(
+            create_file(self.root.as_fd(), path)?.into(),
+        )))
+    }
+    pub fn create_jsonseq_lz_writer(&self, path: &CStr) -> anyhow::Result<JsonSeqLzFile> {
+        Ok(JsonSeqLzFile(JsonSeqWriter(LzipFile::create(
+            self.root.as_fd(),
+            path,
+        )?)))
     }
 
     pub fn objects_cbor(&self) -> std::io::Result<CborFile> {

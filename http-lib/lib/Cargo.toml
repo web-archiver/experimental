@@ -29,6 +29,7 @@ tracing-subscriber = { version = "0.3.19", features = [
   "valuable",
   "json",
 ] }
+tracing-appender = "0.2.5"
 indicatif.workspace = true
 tracing-indicatif.workspace = true
 uuid = { workspace = true, features = ["v4", "v7", "v8"] }
@@ -63,6 +64,7 @@ url.workspace = true
 brotli = "8.0.4"
 flate2 = "1.1.9"
 zstd = "0.13.3"
+lzlib = "0.1.0"
 webar-target-info = { version = "0.1.0", path = "../target-info" }
 cookie = "0.18.1"
 time = "0.3.53"

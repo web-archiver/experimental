@@ -20,6 +20,7 @@ pub mod data_writer;
 pub mod http_client;
 pub mod local_id;
 pub mod log;
+mod lzip_file;
 pub mod object_store;
 
 #[derive(ToGCbor)]
@@ -548,9 +549,11 @@ pub fn run_fetcher(
 
     match unsafe { rustix::runtime::kernel_fork() }.context("failed to fork child")? {
         rustix::runtime::Fork::Child(_) => {
-            if let Err(e) = log::init(root.as_fd(), &webar_http_lib_core::fetch::TRACING_MAIN) {
-                return Err(e.context("failed to init tracing"));
-            }
+            let _guard = match log::init(root.as_fd(), &webar_http_lib_core::fetch::TRACING_MAIN_LZ)
+            {
+                Ok(g) => g,
+                Err(e) => return Err(e.context("failed to init tracing")),
+            };
 
             tracing::info!(
                 fetch_id = tracing::field::display(&uuid),
@@ -592,10 +595,13 @@ pub fn run_fetcher(
             }
         }
         rustix::runtime::Fork::ParentOf(pid) => {
-            if let Err(e) = log::init(root.as_fd(), &webar_http_lib_core::fetch::TRACING_CONNECTOR)
-            {
-                return Err(e.context("failed to init tracing for parent"));
-            }
+            let _guard = match log::init(
+                root.as_fd(),
+                &webar_http_lib_core::fetch::TRACING_CONNECTOR_LZ,
+            ) {
+                Ok(g) => g,
+                Err(e) => return Err(e.context("failed to init tracing for parent")),
+            };
 
             let connectors = connector_state
                 .try_mapi(|idx, c| {

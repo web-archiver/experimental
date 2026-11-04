@@ -1,4 +1,4 @@
-use std::os::fd::BorrowedFd;
+use std::{os::fd::BorrowedFd, sync::Mutex};
 
 use anyhow::Context;
 use tracing::{level_filters::LevelFilter, span};
@@ -9,7 +9,7 @@ use tracing_subscriber::{
 
 use webar_core::{codec::gcbor::ToGCbor, time::Timestamp};
 use webar_http_lib_core::fetch::TracingFilePaths;
-use webar_utils_fs::{create_dir, create_file, set_dir_ro};
+use webar_utils_fs::{create_dir, set_dir_ro};
 
 #[derive(Clone, Copy, ToGCbor, serde::Serialize)]
 struct ThreadInfo<'a> {
@@ -152,23 +152,59 @@ where
     }
 }
 
-pub(crate) fn init(root: BorrowedFd, paths: &TracingFilePaths) -> Result<(), anyhow::Error> {
+struct FileWriter(tracing_appender::non_blocking::NonBlocking);
+impl FileWriter {
+    fn create(
+        name: &str,
+        root: BorrowedFd<'_>,
+        path: &std::ffi::CStr,
+    ) -> anyhow::Result<(Self, tracing_appender::non_blocking::WorkerGuard)> {
+        let (w, g) = tracing_appender::non_blocking::NonBlockingBuilder::default()
+            .thread_name(name)
+            .lossy(false)
+            .finish(crate::lzip_file::LzipFile::create(root, path)?);
+        Ok((Self(w), g))
+    }
+}
+impl std::io::Write for FileWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.write(buf)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.0.flush()
+    }
+}
+
+pub(crate) struct Guard {
+    _full_txt: tracing_appender::non_blocking::WorkerGuard,
+    _pretty_txt: tracing_appender::non_blocking::WorkerGuard,
+    _gcbor: tracing_appender::non_blocking::WorkerGuard,
+    _json: tracing_appender::non_blocking::WorkerGuard,
+    _cbor: tracing_appender::non_blocking::WorkerGuard,
+}
+
+pub(crate) fn init(root: BorrowedFd, paths: &TracingFilePaths) -> Result<Guard, anyhow::Error> {
     create_dir(root, paths.dir).context("failed to create tracing dir")?;
     let ind = IndicatifLayer::new();
-    let full_txt_file = std::fs::File::from(
-        create_file(root, paths.log_full_txt).context("failed to create tracing full txt")?,
-    );
-    let pretty_txt_file = std::fs::File::from(
-        create_file(root, paths.log_pretty_txt).context("failed to create tracing txt")?,
-    );
-    let json_file = std::fs::File::from(
-        create_file(root, paths.log_json).context("faield to create tracing json")?,
-    );
+    let (full_txt_file, full_txt_guard) =
+        FileWriter::create("tracing-full", root, paths.log_full_txt)
+            .context("failed to create tracing full txt")?;
+    let (pretty_txt_file, pretty_txt_guard) =
+        FileWriter::create("tracing-pretty", root, paths.log_pretty_txt)
+            .context("failed to create tracing txt")?;
+    let (json_file, json_guard) = FileWriter::create("tracing-json", root, paths.log_json)
+        .context("faield to create tracing json")?;
+    let (gcbor_file, gcbor_guard) = FileWriter::create("tracing-gcbor", root, paths.log_gcbor)
+        .context("failed to create gcbor file")?;
+    let (serde_cbor_file, serde_cbor_guard) =
+        FileWriter::create("tracing-cbor", root, paths.log_cbor)
+            .context("failed to create cbor file")?;
+
     registry()
         .with(
             tracing_subscriber::fmt::layer()
                 .pretty()
-                .with_writer(pretty_txt_file)
+                .with_writer(Mutex::new(pretty_txt_file))
                 .with_ansi(false)
                 .with_level(true)
                 .with_line_number(true)
@@ -180,13 +216,13 @@ pub(crate) fn init(root: BorrowedFd, paths: &TracingFilePaths) -> Result<(), any
         )
         .with(
             tracing_subscriber::fmt::layer()
-                .with_writer(full_txt_file)
+                .with_writer(Mutex::new(full_txt_file))
                 .with_ansi(false),
         )
         .with(
             tracing_subscriber::fmt::layer()
                 .json()
-                .with_writer(json_file)
+                .with_writer(Mutex::new(json_file))
                 .with_current_span(true)
                 .with_level(true)
                 .with_line_number(true)
@@ -209,12 +245,18 @@ pub(crate) fn init(root: BorrowedFd, paths: &TracingFilePaths) -> Result<(), any
         )
         .with(ind.with_filter(IndicatifFilter::new(false)))
         .with(WriteLayer {
-            gcbor: gcbor_layer::GCborLayer::new(root, paths.log_gcbor)
+            gcbor: gcbor_layer::GCborLayer::new(gcbor_file)
                 .context("failed to create gcbor layer")?,
-            serde: serde_layer::SerdeLayer::new(root, paths.log_cbor)
+            serde: serde_layer::SerdeLayer::new(serde_cbor_file)
                 .context("failed to create serde layer")?,
         })
         .init();
     set_dir_ro(root, paths.dir).context("failed to set tracing dir mode")?;
-    Ok(())
+    Ok(Guard {
+        _full_txt: full_txt_guard,
+        _pretty_txt: pretty_txt_guard,
+        _gcbor: gcbor_guard,
+        _json: json_guard,
+        _cbor: serde_cbor_guard,
+    })
 }

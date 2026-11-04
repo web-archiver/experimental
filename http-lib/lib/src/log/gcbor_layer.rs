@@ -1,6 +1,5 @@
-use std::{ffi::CStr, fs::File, io::Write, ops::DerefMut, os::fd::BorrowedFd, sync::Mutex};
+use std::{io::Write, ops::DerefMut, sync::Mutex};
 
-use anyhow::Context as AnyHowCtx;
 use tracing::{field::Visit, Subscriber};
 use tracing_subscriber::registry::LookupSpan;
 use webar_core::{
@@ -14,8 +13,6 @@ use webar_core::{
     },
     time::Timestamp,
 };
-
-use webar_utils_fs::create_file;
 
 use super::gcbor_field;
 
@@ -286,15 +283,10 @@ struct Entry<'a> {
     kind: EventKind<'a>,
 }
 
-pub struct GCborLayer(Mutex<(ValueBuf, File)>);
+pub struct GCborLayer(Mutex<(ValueBuf, super::FileWriter)>);
 impl GCborLayer {
-    pub fn new(root: BorrowedFd, path: &CStr) -> anyhow::Result<Self> {
-        Ok(Self(Mutex::new((
-            ValueBuf::new(),
-            create_file(root, path)
-                .context("failed to create tracing log file")?
-                .into(),
-        ))))
+    pub fn new(file: super::FileWriter) -> anyhow::Result<Self> {
+        Ok(Self(Mutex::new((ValueBuf::new(), file))))
     }
 
     pub fn add_entry<S>(

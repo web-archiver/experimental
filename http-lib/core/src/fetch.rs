@@ -65,6 +65,14 @@ pub const TRACING_MAIN: TracingFilePaths = TracingFilePaths {
     log_cbor: c"tracing-main/log-serde.cborseq",
     log_json: c"tracing-main/log.json",
 };
+pub const TRACING_MAIN_LZ: TracingFilePaths = TracingFilePaths {
+    dir: c"tracing-main",
+    log_gcbor: c"tracing-main/log.gcborseq.lz",
+    log_pretty_txt: c"tracing-main/text_pretty.log.txt.lz",
+    log_full_txt: c"tracing-main/text_full.log.txt.lz",
+    log_cbor: c"tracing-main/log-serde.cborseq.lz",
+    log_json: c"tracing-main/log.json.lz",
+};
 pub const TRACING_CONNECTOR: TracingFilePaths = TracingFilePaths {
     dir: c"tracing-connector",
     log_gcbor: c"tracing-connector/log.gcborseq",
@@ -72,6 +80,14 @@ pub const TRACING_CONNECTOR: TracingFilePaths = TracingFilePaths {
     log_full_txt: c"tracing-connector/text_full.log.txt",
     log_cbor: c"tracing-connector/log-serde.cborseq",
     log_json: c"tracing-connector/log.json",
+};
+pub const TRACING_CONNECTOR_LZ: TracingFilePaths = TracingFilePaths {
+    dir: c"tracing-connector",
+    log_gcbor: c"tracing-connector/log.gcborseq.lz",
+    log_pretty_txt: c"tracing-connector/text_pretty.log.txt.lz",
+    log_full_txt: c"tracing-connector/text_full.log.txt.lz",
+    log_cbor: c"tracing-connector/log-serde.cborseq.lz",
+    log_json: c"tracing-connector/log.json.lz",
 };
 
 pub const CONNECTORS_DIR: FilePath = FilePath::new_throw(c"connector");

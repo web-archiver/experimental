@@ -1543,7 +1543,7 @@ pub struct Fetcher {
     client: crate::client::Client,
     data_tar: webar_http_lib::data_writer::DataTar,
     object_file: webar_http_lib::data_writer::CborFile,
-    debug_file: webar_http_lib::data_writer::JsonSeqFile,
+    debug_file: webar_http_lib::data_writer::JsonSeqLzFile,
     data_buf: webar_http_lib::data_writer::DataBuf,
     path_buf: PathBuf,
     info: GlobalInfo,
@@ -1570,7 +1570,7 @@ impl Fetcher {
             .objects_cbor()
             .context("failed to create object cbor file")?;
         let debug_file = data_writer
-            .create_jsonseq_writer(c"visitor_debug.json")
+            .create_jsonseq_lz_writer(c"visitor_debug.json.lz")
             .context("failed to create visitor debug file")?;
         data_writer.finish()?;
 
@@ -1965,6 +1965,7 @@ impl Fetcher {
 
     pub fn finish(self) -> anyhow::Result<()> {
         self.data_tar.finish()?;
+        self.debug_file.finish()?;
         Ok(())
     }
 }

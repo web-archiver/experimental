@@ -1,12 +1,6 @@
-use std::{
-    ffi::CStr, fs::File, io::Write, ops::DerefMut, os::fd::BorrowedFd, sync::Mutex,
-    time::SystemTime,
-};
+use std::{io::Write, ops::DerefMut, sync::Mutex, time::SystemTime};
 
-use anyhow::Context as _;
 use tracing_serde::{AsSerde, SerializeAttributes, SerializeEvent, SerializeId, SerializeRecord};
-
-use webar_utils_fs::create_file;
 
 type EventKind<'a> =
     super::Kind<SerializeId<'a>, SerializeAttributes<'a>, SerializeRecord<'a>, SerializeEvent<'a>>;
@@ -29,15 +23,10 @@ struct Entry<'a> {
     kind: EventKind<'a>,
 }
 
-pub struct SerdeLayer(Mutex<(Vec<u8>, File)>);
+pub struct SerdeLayer(Mutex<(Vec<u8>, super::FileWriter)>);
 impl SerdeLayer {
-    pub fn new(root: BorrowedFd, path: &'static CStr) -> anyhow::Result<Self> {
-        Ok(Self(Mutex::new((
-            Vec::new(),
-            create_file(root, path)
-                .context("failed to create log file")?
-                .into(),
-        ))))
+    pub fn new(file: super::FileWriter) -> anyhow::Result<Self> {
+        Ok(Self(Mutex::new((Vec::new(), file))))
     }
     pub fn add_entry<S>(
         &self,
