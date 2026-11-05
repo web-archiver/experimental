@@ -53,6 +53,8 @@ enum VisitStatus {
     /// fetching started but may not received data
     Fetching,
     Fetched,
+    /// object is not accessible, (e.g. role is none)
+    Inaccessible,
     Failed,
 }
 impl VisitStatus {
@@ -65,7 +67,12 @@ impl VisitStatus {
     }
     fn with_should_fetch(self, should_fetch: Option<bool>) -> Self {
         match self {
-            Self::Blocked | Self::Queued | Self::Fetching | Self::Fetched | Self::Failed => self,
+            Self::Blocked
+            | Self::Queued
+            | Self::Fetching
+            | Self::Fetched
+            | Self::Inaccessible
+            | Self::Failed => self,
             Self::Ignored => match should_fetch {
                 Some(true) => Self::Blocked,
                 Some(false) | None => Self::Ignored,
@@ -85,22 +92,21 @@ impl VisitStatus {
     }
     fn on_enqueue(&mut self, ops: impl FnOnce()) {
         match self {
-            Self::Unknown | Self::Blocked | Self::Fetching | Self::Ignored => {
+            Self::Unknown | Self::Blocked | Self::Ignored => {
                 ops();
                 *self = Self::Queued;
             }
-            Self::Queued => (),
-            Self::Fetched => (),
-            Self::Failed => (),
+            Self::Queued | Self::Fetching | Self::Fetched | Self::Inaccessible | Self::Failed => (),
         }
     }
     fn on_blocked(&mut self) {
         match self {
-            Self::Blocked => (),
-            Self::Queued => (),
-            Self::Fetching => (),
-            Self::Fetched => (),
-            Self::Failed => (),
+            Self::Blocked
+            | Self::Queued
+            | Self::Fetching
+            | Self::Fetched
+            | Self::Inaccessible
+            | Self::Failed => (),
             Self::Ignored | Self::Unknown => *self = Self::Blocked,
         }
     }
@@ -112,13 +118,30 @@ impl VisitStatus {
             | Self::Queued
             | Self::Fetching
             | Self::Fetched
+            | Self::Inaccessible
             | Self::Failed => (),
         }
     }
     fn on_disallowed(&mut self) {
         match self {
             Self::Unknown | Self::Blocked => *self = Self::Ignored,
-            Self::Ignored | Self::Queued | Self::Fetching | Self::Fetched | Self::Failed => (),
+            Self::Ignored
+            | Self::Queued
+            | Self::Fetching
+            | Self::Fetched
+            | Self::Inaccessible
+            | Self::Failed => (),
+        }
+    }
+    fn on_inaccessible(&mut self) {
+        match self {
+            Self::Unknown | Self::Blocked => *self = Self::Inaccessible,
+            Self::Ignored
+            | Self::Queued
+            | Self::Fetching
+            | Self::Fetched
+            | Self::Inaccessible
+            | Self::Failed => (),
         }
     }
 }
@@ -521,7 +544,7 @@ impl<'c> VisitState<'c> {
                                 ty0 = tracing::field::valuable(&ty),
                                 "inconsistent object type"
                             );
-                            return Err(ty);
+                            r // return directly will cause infinite recursion
                         }
                     }
                     (o @ ObjectInfo::Page(_), TableType::Block)
@@ -1457,18 +1480,47 @@ impl<T: for<'a> ApiObject<Ptr<'a> = RecordPtr>> ApiObject for WithRole<T> {
                 global_info,
                 state,
             ),
-            crate::types::RoleVal::WithRole {
-                role: _,
-                value: None,
-            } => {
-                state.add_pending_object(
+            crate::types::RoleVal::WithRole { role, value: None } => match *role {
+                crate::types::Role::None => match table {
+                    TableType::CollectionView => {
+                        match state.add_obj_collection_view(global_info, id, *space_id, None) {
+                            Ok(r) => {
+                                r.state.status.info.on_inaccessible();
+                            }
+                            Err(t) => {
+                                tracing::warn!(
+                                    table = tracing::field::valuable(&table),
+                                    ty = tracing::field::valuable(&t),
+                                    "inconsistent object type"
+                                );
+                            }
+                        }
+                    }
+                    _ => match state.add_obj_record(global_info, id, *space_id, table) {
+                        Ok(r) => {
+                            r.state.status.fetched.on_inaccessible();
+                        }
+                        Err(Some(ObjectType::Page)) => {
+                            let r = state.add_obj_page(global_info, id).unwrap();
+                            r.state.status.content.on_inaccessible();
+                        }
+                        Err(t) => {
+                            tracing::warn!(
+                                table = tracing::field::valuable(&table),
+                                ty = tracing::field::valuable(&t),
+                                "inconsistent object type"
+                            )
+                        }
+                    },
+                },
+                crate::types::Role::Other => state.add_pending_object(
                     global_info,
                     id,
                     *space_id,
                     Some(ObjectType::Record(table)),
                     true,
-                );
-            }
+                ),
+            },
         }
     }
 }

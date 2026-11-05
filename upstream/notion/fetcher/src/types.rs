@@ -19,7 +19,11 @@ impl UserTimeZone {
 
 #[derive(Deserialize)]
 #[non_exhaustive]
-pub struct Role(serde::de::IgnoredAny);
+pub enum Role {
+    None,
+    #[serde(other)]
+    Other,
+}
 
 #[inline]
 const fn missing_option_field<T>() -> Option<T> {
