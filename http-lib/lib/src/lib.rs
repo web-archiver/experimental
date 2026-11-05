@@ -22,6 +22,7 @@ pub mod local_id;
 pub mod log;
 mod lzip_file;
 pub mod object_store;
+pub mod util;
 
 #[derive(ToGCbor)]
 struct Uname<'a> {

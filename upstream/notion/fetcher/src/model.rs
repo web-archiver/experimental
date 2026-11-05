@@ -10,6 +10,7 @@ use crate::fetcher::{
 #[allow(dead_code)]
 trait EnumTag: Sized + 'static {
     const ALL: &[Self];
+    const ALL_STR: &'static [&'static str];
     fn tag_from_str(s: &str) -> Option<Self>;
     fn tag_to_str(self) -> &'static str;
 }
@@ -32,6 +33,7 @@ macro_rules! mk_enum_tag {
         }
         impl $crate::model::EnumTag for $n {
             const ALL: &[Self] = &[$(Self::$c),*];
+            const ALL_STR: &'static [&'static str] = &[$($val),*];
             fn tag_from_str(s: &str) -> Option<Self> {
                 match s {
                     $($val => Some(Self::$c),)*
@@ -95,6 +97,38 @@ impl<'de, T: NamedEnumTag> Deserialize<'de> for EnumVal<T> {
     }
 }
 
+pub struct KnownEnumVal<T>(pub T);
+impl<T> KnownEnumVal<T> {
+    #[inline]
+    fn into_inner(self) -> T {
+        self.0
+    }
+}
+impl<'de, T: NamedEnumTag> Deserialize<'de> for KnownEnumVal<T> {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct Visitor<T>(PhantomData<fn() -> T>);
+        impl<'de, T: NamedEnumTag> serde::de::Visitor<'de> for Visitor<T> {
+            type Value = KnownEnumVal<T>;
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str(T::EXPECT)
+            }
+            fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                match T::tag_from_str(v) {
+                    Some(r) => Ok(KnownEnumVal(r)),
+                    None => Err(E::unknown_variant(v, T::ALL_STR)),
+                }
+            }
+        }
+        deserializer.deserialize_str(Visitor(PhantomData))
+    }
+}
+
 mk_enum_tag!(
     #[derive(valuable::Valuable)]
     #[non_exhaustive]
@@ -129,6 +163,14 @@ impl serde::Serialize for TableType {
         S: serde::Serializer,
     {
         serializer.serialize_str(self.to_str_internal())
+    }
+}
+impl<'de> serde::Deserialize<'de> for TableType {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        KnownEnumVal::<Self>::deserialize(deserializer).map(KnownEnumVal::into_inner)
     }
 }
 pub struct VecMap<K, V>(pub Vec<(K, V)>);

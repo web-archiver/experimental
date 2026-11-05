@@ -1,4 +1,5 @@
 use std::{
+    borrow::Cow,
     collections::{HashMap, HashSet, VecDeque, hash_map},
     ffi::CStr,
     fmt::{Debug, Write as _},
@@ -7,7 +8,7 @@ use std::{
 };
 
 use anyhow::Context;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use uuid::{Uuid, uuid};
 
 use webar_http_lib::{
@@ -42,7 +43,7 @@ impl ObjectType {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, valuable::Valuable)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, valuable::Valuable)]
 #[serde(rename_all = "snake_case")]
 enum VisitStatus {
     Unknown,
@@ -273,7 +274,7 @@ impl ObjectState {
 /// Does not distinguish type to simplify design (no need to get schema when
 /// fetching collection entries), just fetch every link to notion image, video,
 /// audio domain
-#[derive(Debug, Serialize, valuable::Valuable)]
+#[derive(Debug, Serialize, Deserialize, valuable::Valuable)]
 struct ResourceStatus<S: valuable::Valuable> {
     fetched: S,
 }
@@ -311,7 +312,7 @@ struct ResourceInfo {
     url: Option<webar_http_lib::http_client::Url>,
     status: ResourceStatus<bool>,
 }
-#[derive(Debug, Serialize, valuable::Valuable)]
+#[derive(Debug, Serialize, Deserialize, valuable::Valuable)]
 struct ResourceState {
     table: TableType,
     id: UuidVal,
@@ -1326,7 +1327,8 @@ impl<'c> VisitState<'c> {
                                 }
                                 let host = url.host_str().context("url missing host")?;
                                 if host.ends_with(".amazonaws.com")
-                                    && url.path().starts_with("/secure.notion-static.com/")
+                                    && (url.path().starts_with("/secure.notion-static.com/")
+                                        || host.starts_with("prod-files-secure.s3."))
                                 {
                                     Ok(ResourceInfo {
                                         src: ResourceSrc::NotionUrl,
@@ -1937,10 +1939,9 @@ impl Fetcher {
         Ok(())
     }
 
-    fn exec_fetch(&mut self, config: VisitConfig<'_>, queue: OpsQueue) -> anyhow::Result<()> {
+    fn exec_fetch(&mut self, mut vis: VisitState<'_>) -> anyhow::Result<()> {
         let visit_seq = self.fetch_seq;
         self.fetch_seq += 1;
-        let mut vis = VisitState::new(config, queue);
         while !vis.queue.is_empty() {
             while let Some(p) = vis.queue.get_page.pop_front() {
                 self.get_page_chunk(p.page_id, &mut vis)?;
@@ -2022,7 +2023,7 @@ impl Fetcher {
         page_id: Uuid,
         allowed_spaces: &HashSet<Uuid>,
     ) -> anyhow::Result<()> {
-        self.exec_fetch(
+        self.exec_fetch(VisitState::new(
             VisitConfig {
                 recurse_page: true,
                 fetch_mention: false,
@@ -2038,7 +2039,58 @@ impl Fetcher {
                 fetch_record: Vec::new(),
                 get_resource: VecDeque::new(),
             },
-        )
+        ))
+    }
+    pub fn fetch_resource_from_debug(
+        &mut self,
+        debug: impl std::io::BufRead,
+    ) -> anyhow::Result<()> {
+        let allowed_spaces = HashSet::new();
+        let mut vis = VisitState::new(
+            VisitConfig {
+                recurse_page: false,
+                fetch_mention: false,
+                follow_copied_from: false,
+                follow_parent: false,
+                fetch_resource: true,
+                allowed_spaces: &allowed_spaces,
+            },
+            OpsQueue {
+                get_page: VecDeque::new(),
+                query_collection: VecDeque::new(),
+                get_record: Vec::new(),
+                fetch_record: Vec::new(),
+                get_resource: VecDeque::new(),
+            },
+        );
+        #[derive(Deserialize)]
+        struct DbgVis<'a> {
+            resource: HashMap<Cow<'a, str>, ResourceState>,
+        }
+        #[derive(Deserialize)]
+        struct Dbg<'a> {
+            visit_state: DbgVis<'a>,
+        }
+        let mut rdr = webar_http_lib::util::JsonSeqLzReader::new(debug)
+            .context("failed to read debug file")?;
+        while let Some(r) = rdr.next::<Dbg<'_>>().context("failed to read debug file")? {
+            for (u, v) in r.visit_state.resource.iter() {
+                match v.status.fetched {
+                    VisitStatus::Blocked
+                    | VisitStatus::Queued
+                    | VisitStatus::Fetched
+                    | VisitStatus::Inaccessible => (),
+                    // recheck resource status
+                    VisitStatus::Unknown
+                    | VisitStatus::Ignored
+                    | VisitStatus::Fetching
+                    | VisitStatus::Failed => {
+                        vis.add_pending_resource(&mut self.info, u, v.table, v.id.0, true);
+                    }
+                }
+            }
+        }
+        self.exec_fetch(vis)
     }
 
     pub fn finish(self) -> anyhow::Result<()> {
