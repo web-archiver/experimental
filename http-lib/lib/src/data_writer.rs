@@ -57,13 +57,16 @@ impl JsonSeqFile {
         self.0.add(buf, obj)
     }
 }
-pub struct JsonSeqLzFile(JsonSeqWriter<LzipFile>);
+pub struct JsonSeqLzFile {
+    file: JsonSeqWriter<tracing_appender::non_blocking::NonBlocking>,
+    _guard: Option<tracing_appender::non_blocking::WorkerGuard>,
+}
 impl JsonSeqLzFile {
     pub fn add(&mut self, buf: &mut DataBuf, obj: &impl serde::Serialize) -> anyhow::Result<()> {
-        self.0.add(buf, obj)
+        self.file.add(buf, obj)
     }
-    pub fn finish(mut self) -> anyhow::Result<()> {
-        self.0 .0.finish()
+    pub fn finish(self) -> anyhow::Result<()> {
+        Ok(())
     }
 }
 
@@ -212,10 +215,14 @@ impl DataWriter {
         )))
     }
     pub fn create_jsonseq_lz_writer(&self, path: &CStr) -> anyhow::Result<JsonSeqLzFile> {
-        Ok(JsonSeqLzFile(JsonSeqWriter(LzipFile::create(
-            self.root.as_fd(),
-            path,
-        )?)))
+        let (file, guard) = tracing_appender::non_blocking::NonBlockingBuilder::default()
+            .thread_name("jsonseq-writer")
+            .lossy(false)
+            .finish(LzipFile::create(self.root.as_fd(), path)?);
+        Ok(JsonSeqLzFile {
+            file: JsonSeqWriter(file),
+            _guard: Some(guard),
+        })
     }
 
     pub fn objects_cbor(&self) -> std::io::Result<CborFile> {
