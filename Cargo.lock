@@ -2668,6 +2668,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "webar-upstream-http-fetcher"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "http",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "uuid",
+ "webar-core",
+ "webar-http-lib",
+]
+
+[[package]]
+name = "webar-upstream-http-fetcher-bin"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "tracing",
+ "webar-http-lib",
+ "webar-upstream-http-fetcher",
+]
+
+[[package]]
 name = "webar-upstream-nmbxd-fetcher"
 version = "0.1.0"
 dependencies = [

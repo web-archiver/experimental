@@ -176,7 +176,7 @@ impl RequestBuilder {
             req: self.req.header(k, v),
         }
     }
-    pub fn build(self, body: ReqBody) -> anyhow::Result<Request> {
+    pub fn build(self, body: ReqBody) -> Result<Request, http::Error> {
         let (parts, _) = self.req.body(())?.into_parts();
         Ok(Request(http_service::Request {
             url: self.url,

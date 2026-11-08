@@ -1,0 +1,15 @@
+[package]
+name = "webar-upstream-http-fetcher"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+http.workspace = true
+tokio.workspace = true
+webar-core.workspace = true
+webar-http-lib.workspace = true

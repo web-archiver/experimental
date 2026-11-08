@@ -23,6 +23,8 @@ members = [
   "upstream/notion/fetcher-bin",
   "upstream/nmbxd/fetcher",
   "upstream/nmbxd/fetcher-bin",
+  "upstream/http/fetcher",
+  "upstream/http/fetcher-bin",
 ]
 
 
@@ -68,3 +70,7 @@ webar-store-backend-fs = { path = "./store/backend/fs" }
 webar-net-core = { path = "./net/core-rs" }
 webar-utils-fs = { path = "./utils/fs" }
 webar-http-lib = { path = "./http-lib/lib" }
+
+[profile.release]
+debug = true
+strip = false

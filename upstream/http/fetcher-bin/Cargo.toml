@@ -1,0 +1,12 @@
+[package]
+name = "webar-upstream-http-fetcher-bin"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+tracing.workspace = true
+webar-http-lib.workspace = true
+webar-upstream-http-fetcher = { path = "../fetcher" }
