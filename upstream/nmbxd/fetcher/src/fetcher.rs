@@ -52,7 +52,7 @@ impl Fetcher {
         })
     }
     fn get_image(&mut self, img: &str, ext: &str) -> anyhow::Result<()> {
-        let _span = tracing::info_span!("get_image", img, ext).entered();
+        let _span = tracing::error_span!("get_image", img, ext).entered();
 
         let seq = self.seq;
         self.seq += 1;
@@ -97,7 +97,7 @@ impl Fetcher {
         Ok(())
     }
     pub fn fetch_thread(&mut self, id: ThreadId) -> anyhow::Result<()> {
-        let span = tracing::info_span!(
+        let span = tracing::error_span!(
             "fetch_thread",
             id = id.0,
             indicatif.pb_show = tracing::field::Empty
@@ -169,7 +169,7 @@ impl Fetcher {
     }
 
     pub fn list_forums(&mut self) -> anyhow::Result<()> {
-        let _span = tracing::info_span!("list_forums").entered();
+        let _span = tracing::error_span!("list_forums").entered();
 
         let seq = self.seq;
         self.seq += 1;

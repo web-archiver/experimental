@@ -9,7 +9,7 @@ use tracing_subscriber::{
 
 use webar_core::{codec::gcbor::ToGCbor, time::Timestamp};
 use webar_http_lib_core::fetch::TracingFilePaths;
-use webar_utils_fs::{create_dir, set_dir_ro};
+use webar_utils_fs::{create_dir, create_file, set_dir_ro};
 
 #[derive(Clone, Copy, ToGCbor, serde::Serialize)]
 struct ThreadInfo<'a> {
@@ -189,6 +189,9 @@ pub(crate) fn init(root: BorrowedFd, paths: &TracingFilePaths) -> Result<Guard, 
     let (full_txt_file, full_txt_guard) =
         FileWriter::create("tracing-full", root, paths.log_full_txt)
             .context("failed to create tracing full txt")?;
+    let warn_file = std::fs::File::from(
+        create_file(root, paths.log_warn_txt).context("failed to create warning log file")?,
+    );
     let (pretty_txt_file, pretty_txt_guard) =
         FileWriter::create("tracing-pretty", root, paths.log_pretty_txt)
             .context("failed to create tracing txt")?;
@@ -231,6 +234,12 @@ pub(crate) fn init(root: BorrowedFd, paths: &TracingFilePaths) -> Result<Guard, 
                 .with_target(true)
                 .with_thread_ids(true)
                 .with_thread_names(true),
+        )
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_writer(warn_file)
+                .with_ansi(false)
+                .with_filter(LevelFilter::WARN),
         )
         .with(
             tracing_subscriber::fmt::layer()

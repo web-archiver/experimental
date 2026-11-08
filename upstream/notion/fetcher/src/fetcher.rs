@@ -1670,7 +1670,7 @@ impl Fetcher {
         })
     }
     fn get_page_chunk(&mut self, page_id: Uuid, vis: &mut VisitState) -> anyhow::Result<()> {
-        let _span = tracing::info_span!(
+        let _span = tracing::error_span!(
             "get_page_chunk",
             page_id = tracing::field::display(&page_id)
         )
@@ -1725,7 +1725,7 @@ impl Fetcher {
         qc: &QueryCollection,
         vis: &mut VisitState,
     ) -> anyhow::Result<()> {
-        let _span = tracing::info_span!(
+        let _span = tracing::error_span!(
             "query_collection_view",
             space_id = tracing::field::display(&qc.space_id),
             collection_id = tracing::field::display(&qc.collection_id),
@@ -1797,7 +1797,7 @@ impl Fetcher {
         Ok(())
     }
     fn sync_records_main(&mut self, rec: &[GetRecord], vis: &mut VisitState) -> anyhow::Result<()> {
-        let _span = tracing::info_span!("sync_records_main").entered();
+        let _span = tracing::error_span!("sync_records_main").entered();
 
         tracing::info!("fetching records");
 
@@ -1875,7 +1875,7 @@ impl Fetcher {
     }
     fn fetch_resource(&mut self, r: GetResource, vis: &mut VisitState) -> anyhow::Result<()> {
         let url_str = self.info.urls.resolve(&r.url);
-        let _span = tracing::info_span!("fetch_resource", url = url_str).entered();
+        let _span = tracing::error_span!("fetch_resource", url = url_str).entered();
 
         let seq = self.seq;
         self.seq += 1;
